@@ -1,4 +1,4 @@
-# ssh-reverse-open
+# ssh-reverse-ntfy
 
 *Written by Claude 4.5 Opus via [Claude Code](https://claude.ai/code)*
 
