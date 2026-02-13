@@ -17,50 +17,68 @@ When working on a remote dev server over SSH, CLI tools like `gh auth login`, `g
 
 ## Quick Start
 
-### Local (macOS)
+### Fixed topic (recommended for private ntfy instances)
 
-1. Source the shell function:
-   ```bash
-   # Add to ~/.zshrc or ~/.bashrc
-   source /path/to/ssh-reverse-open/shell.zsh
-   ```
+No `sshd_config` changes, no `SendEnv`/`AcceptEnv`, works through tmux.
 
-2. Configure SSH to send the environment variable:
-   ```bash
-   # Add to ~/.ssh/config
-   Host devbox
-     SendEnv URL_FORWARD_TOPIC
-   ```
+**Local:**
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+source /path/to/ssh-reverse-ntfy/shell.zsh
 
-### Remote (Linux)
+# Create ~/.config/ssh-ntfy/config.toml
+mkdir -p ~/.config/ssh-ntfy
+echo 'url = "https://ntfy.example.com/my-ssh-topic"' > ~/.config/ssh-ntfy/config.toml
+```
 
-1. Install the shim:
-   ```bash
-   ssh-ntfy devbox 'bash -s' < install-remote.sh
-   ```
+**Remote:**
+```bash
+ssh devbox 'bash -s' < install-remote.sh https://ntfy.example.com/my-ssh-topic
+```
 
-2. Ensure `~/.local/bin` is in your PATH (before `/usr/bin`)
+The install script writes the same `config.toml` on the remote.
 
-3. Ask your sysadmin to add to `/etc/ssh/sshd_config`:
-   ```
-   AcceptEnv URL_FORWARD_TOPIC
-   ```
+### Random topic (default, uses ntfy.sh)
+
+Requires `SendEnv`/`AcceptEnv` configuration.
+
+**Local:**
+```bash
+# Add to ~/.zshrc or ~/.bashrc
+source /path/to/ssh-reverse-ntfy/shell.zsh
+
+# Add to ~/.ssh/config
+Host devbox
+  SendEnv URL_FORWARD_NTFY
+```
+
+**Remote:**
+```bash
+ssh devbox 'bash -s' < install-remote.sh
+# Then add to /etc/ssh/sshd_config (requires root):
+#   AcceptEnv URL_FORWARD_NTFY
+```
+
+### Both modes
+
+Ensure `~/.local/bin` is in your PATH on the remote (before `/usr/bin`).
 
 ## Usage
 
 ```bash
-ssh-ntfy devbox           # connect with URL forwarding enabled
+ssh-ntfy devbox               # connect with URL forwarding
 xdg-open https://example.com  # opens in your local browser
-gh auth login --web           # OAuth flow completes locally
+gh auth login --web            # OAuth flow completes locally
 ```
 
 ## How It Works
 
-1. `ssh-ntfy` generates a random topic ID and starts a background subscriber
-2. The topic ID is passed to the remote via `SendEnv`
-3. On the remote, the `xdg-open` shim POSTs URLs to ntfy.sh
-4. The local subscriber receives the URL and calls `open`
-5. When SSH exits, the subscriber is cleaned up
+1. `ssh-ntfy` reads the ntfy URL from `~/.config/ssh-ntfy/config.toml`, or generates a random topic on ntfy.sh
+2. Locally, a background subscriber listens for messages on that URL
+3. **Fixed topic:** the remote `xdg-open` shim reads the same URL from its own `config.toml`
+4. **Random topic:** the URL is passed via `SendEnv`/`AcceptEnv` as `URL_FORWARD_NTFY`
+5. The shim POSTs URLs to the ntfy endpoint, the local subscriber calls `open`
+6. When SSH exits, the subscriber is cleaned up
 
 ## Files
 
@@ -73,12 +91,12 @@ gh auth login --web           # OAuth flow completes locally
 
 ## Security
 
-- **Random topic per session** — 128 bits of entropy, unguessable
+- **Random topic per session** (default) — 128 bits of entropy, unguessable
 - **URL-only** — Only `http://` and `https://` URLs are forwarded
 - **No eval** — The local subscriber only calls `open`, never executes received content
 - **Graceful fallback** — If ntfy is unreachable, falls through to normal `xdg-open`
 
-For additional security, you can [self-host ntfy](https://docs.ntfy.sh/install/) and change the base URL in both scripts.
+For additional security, [self-host ntfy](https://docs.ntfy.sh/install/) and configure `config.toml` on both sides.
 
 ## Requirements
 

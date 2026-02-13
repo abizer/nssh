@@ -1,21 +1,25 @@
 #!/bin/bash
 # xdg-open shim for ssh-ntfy URL forwarding
 # Install: place in ~/.local/bin/ (must precede /usr/bin in $PATH)
-# Requires: curl, and URL_FORWARD_TOPIC set by ssh-ntfy wrapper
 
 set -euo pipefail
 
 url="${1:-}"
 
-# If no topic set or arg doesn't look like a URL, fall through to real xdg-open
-if [[ -z "${URL_FORWARD_TOPIC:-}" ]] || [[ ! "$url" =~ ^https?:// ]]; then
+# Resolve ntfy endpoint: env var (random topics) > config file (fixed topics)
+ntfy="${URL_FORWARD_NTFY:-}"
+if [[ -z "$ntfy" ]]; then
+  ntfy="$(sed -n 's/^url *= *"\(.*\)"/\1/p' "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy/config.toml" 2>/dev/null)"
+fi
+
+# No endpoint or arg isn't a URL — fall through to real xdg-open
+if [[ -z "$ntfy" ]] || [[ ! "$url" =~ ^https?:// ]]; then
   exec /usr/bin/xdg-open "$@"
 fi
 
 # Post URL to ntfy (timeout after 5s to avoid hanging)
-if curl -sf -m 5 -d "$url" "https://ntfy.sh/$URL_FORWARD_TOPIC" >/dev/null 2>&1; then
+if curl -sf -m 5 -d "$url" "$ntfy" >/dev/null 2>&1; then
   exit 0
 else
-  # ntfy failed, fall through to real xdg-open
   exec /usr/bin/xdg-open "$@"
 fi
