@@ -1,5 +1,0 @@
-# Add to ~/.ssh/config for hosts you want URL forwarding on
-# Example:
-Host *.example.com
-  SendEnv URL_FORWARD_NTFY
-

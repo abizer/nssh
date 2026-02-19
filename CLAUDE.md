@@ -4,16 +4,14 @@ Shell scripts for forwarding `xdg-open` URLs from remote SSH sessions to local b
 
 ## Architecture
 
-- `shell.zsh` — local `ssh-ntfy` wrapper: reads ntfy URL from `~/.config/ssh-ntfy/config.toml` (or generates random topic on ntfy.sh), subscribes via curl
-- `xdg-open` — remote shim: resolves ntfy endpoint from `config.toml` (fixed) or `$URL_FORWARD_NTFY` env var (random), POSTs URLs, falls through to real xdg-open otherwise
-- `~/.config/ssh-ntfy/config.toml` — shared config format on both local and remote: `url = "https://..."`
-- Two modes:
-  - **Fixed topic** (`config.toml` exists): both sides read their own config file, no `SendEnv`/`AcceptEnv` needed
-  - **Random topic** (default): env var passed via `SendEnv`/`AcceptEnv`, requires sshd_config
+- `shell.zsh` — sources two functions:
+  - `nssh` — SSH wrapper that subscribes to the ntfy topic for the target host, opens URLs locally, then cleans up on exit
+  - `nssh-setup` — bootstraps a remote host: installs the `xdg-open` shim to `~/.local/bin/` and writes `config.toml` with the derived ntfy URL
+- Topic convention: `https://ntfy.abizer.dev/reverse-open-<short-hostname>`
+- Remote `xdg-open` shim reads ntfy URL from `~/.config/ssh-ntfy/config.toml`, POSTs URLs via curl, falls through to real xdg-open otherwise
 
 ## Key constraints
 
-- Random topics must be unguessable (128-bit random)
 - Only forward `http://` and `https://` URLs
 - Never eval or execute received content on local side
 - Graceful fallback when ntfy unreachable
