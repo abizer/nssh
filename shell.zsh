@@ -85,39 +85,20 @@ function nssh() {
 
   local ntfy_url="${_nssh_ntfy_base}/reverse-open-${short_host}"
 
-  local fifo="$(mktemp -u "${TMPDIR:-/tmp}/ssh-ntfy.XXXXXX")"
-  local curl_pid reader_pid
-
   echo "ssh-ntfy: subscribing to ${ntfy_url}"
 
-  mkfifo "$fifo" || { echo "ssh-ntfy: failed to create fifo" >&2; return 1; }
-
-  curl -s --no-buffer "${ntfy_url}/raw" > "$fifo" 2>/dev/null &
-  curl_pid=$!
-
-  while read -r url; do
+  curl -s --no-buffer "${ntfy_url}/raw" | while read -r url; do
     [[ "$url" =~ ^https?:// ]] && open "$url"
-  done < "$fifo" &
-  reader_pid=$!
+  done &
+  local sub_pid=$!
 
-  cleanup() {
-    kill "$curl_pid" "$reader_pid" 2>/dev/null
-    wait "$curl_pid" "$reader_pid" 2>/dev/null
-    rm -f "$fifo"
-  }
-
-  trap cleanup INT HUP TERM
-
-  sleep 0.2
-
-  if ! kill -0 "$curl_pid" 2>/dev/null; then
-    echo "ssh-ntfy: subscriber failed to start. URLs will not be forwarded." >&2
-  fi
+  trap "kill $sub_pid 2>/dev/null; wait $sub_pid 2>/dev/null" INT HUP TERM
 
   ssh "$@"
   local ssh_exit=$?
 
-  cleanup
+  kill $sub_pid 2>/dev/null
+  wait $sub_pid 2>/dev/null
   trap - INT HUP TERM
 
   return $ssh_exit
