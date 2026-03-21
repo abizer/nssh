@@ -1,68 +1,85 @@
 # ssh-reverse-ntfy
 
-Forward `xdg-open` calls from remote SSH sessions to your local browser, using [ntfy.sh](https://ntfy.sh) as a message bus.
+Forward `xdg-open` calls from remote SSH sessions to your local browser, using [ntfy](https://ntfy.sh) as a message bus. OAuth flows (like `gh auth login`, `gcloud auth login`) complete automatically — including the localhost callback.
 
 ```
-Remote Host                        ntfy.sh                       Local Mac
+Remote Host                        ntfy                          Local Mac
 ┌──────────────┐                ┌───────────┐                ┌──────────────┐
 │ xdg-open URL ├───POST /topic──▶           ├───subscribe────▶  open $URL   │
 └──────────────┘                └───────────┘                └──────────────┘
+
+OAuth callback:
+Browser → localhost:8085 (Mac) → ssh -W localhost:8085 devbox → remote server
+                                                                      ↓ response
+Browser ←─────────────────────────────────────────────────────────────┘
+                             [listener and tunnel close]
 ```
 
 ## Why?
 
-When working on a remote dev server over SSH, CLI tools like `gh auth login`, `gcloud auth login`, or `npm login` try to open a browser. These fail silently because there's no browser on the remote host. This tool forwards those URLs back to your local machine.
+CLI tools on remote dev servers (`gh`, `gcloud`, `npm login`) try to open a browser. This fails silently over SSH. This tool forwards those URLs to your local machine — and for OAuth flows with a `localhost` callback, it automatically proxies the callback back to the remote server so the auth completes without manual port forwarding.
 
-## Setup
+## Install
 
 **Local:**
 ```bash
-# Add to ~/.zshrc or ~/.bashrc
+just build   # builds ./nssh
+just run     # builds and installs to ~/.local/bin/nssh
+```
+
+Add to your shell config (for `nssh-setup`):
+```bash
 source /path/to/ssh-reverse-ntfy/shell.zsh
 ```
 
 **Remote (one-time per host):**
 ```bash
-nssh-setup devbox
+just setup devbox
 ```
 
-This SSHs into the host, installs the `xdg-open` shim to `~/.local/bin/`, and writes the ntfy config. Ensure `~/.local/bin` is in PATH on the remote (before `/usr/bin`).
+This SSHs into the host, installs the `xdg-open` shim to `~/.local/bin/`, and writes the ntfy config. Ensure `~/.local/bin` is in `PATH` on the remote (before `/usr/bin`).
+
+For NixOS/home-manager hosts, the shim and config are managed automatically — no manual setup needed.
 
 ## Usage
 
 ```bash
 nssh devbox                    # connect with URL forwarding
 xdg-open https://example.com  # opens in your local browser
-gh auth login --web            # OAuth flow completes locally
+gh auth login --web            # OAuth flow completes locally, including callback
 ```
 
 ## How It Works
 
 1. `nssh` resolves the SSH target hostname and derives the ntfy topic: `reverse-open-<hostname>`
-2. A background curl subscriber listens for messages on that topic
-3. On the remote, the `xdg-open` shim reads the same ntfy URL from `~/.config/ssh-ntfy/config.toml`
-4. The shim POSTs URLs to the ntfy endpoint; the local subscriber calls `open`
-5. When SSH exits, the subscriber is cleaned up
+2. Starts an SSH ControlMaster for connection reuse (used later for OAuth proxying)
+3. Subscribes to the ntfy topic's JSON stream in the background
+4. Runs your interactive SSH session via the control socket
+5. On URL received:
+   - If it contains `localhost:<port>` anywhere (including inside `redirect_uri` query params), starts a one-shot local listener on that port
+   - Opens the URL in your local browser
+   - When the OAuth provider redirects the browser to `localhost:<port>`, proxies that single request to the remote VM via `ssh -W` — reusing the control master, no reauth
+   - Closes listener and tunnel immediately after the response
+6. On exit: ntfy subscription cancelled, control master torn down, socket removed — no orphan processes
 
-No `sshd_config` changes, no `SendEnv`/`AcceptEnv`, no VM reboots. Works through tmux.
+## Configuration
 
-## Files
-
-| File | Purpose |
-|------|---------|
-| `shell.zsh` | `nssh` (connect) and `nssh-setup` (bootstrap remote) |
+| Env var | Default | Purpose |
+|---------|---------|---------|
+| `NSSH_NTFY_BASE` | `https://ntfy.abizer.dev` | ntfy server base URL |
 
 ## Security
 
-- **URL-only** — Only `http://` and `https://` URLs are forwarded
-- **No eval** — The local subscriber only calls `open`, never executes received content
-- **Graceful fallback** — If ntfy is unreachable, falls through to normal `xdg-open`
+- **URL-only** — only `http://` and `https://` URLs are forwarded
+- **No eval** — received content is never executed
+- **One-shot proxy** — port listeners close after a single request
+- **Graceful fallback** — plain `ssh` if ntfy is unreachable or hostname can't be resolved
 
-For additional security, [self-host ntfy](https://docs.ntfy.sh/install/).
+Self-host ntfy for additional isolation: [docs.ntfy.sh/install](https://docs.ntfy.sh/install/).
 
 ## Requirements
 
-- **Local:** macOS with `curl`
+- **Local:** macOS with `ssh`, Go (to build)
 - **Remote:** Linux with `curl` and `~/.local/bin` in PATH
 
 ## License
