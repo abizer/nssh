@@ -1,8 +1,11 @@
 build:
   go build -o nssh .
 
-run: build
+install: build
   mv nssh $HOME/.local/bin/nssh
+
+run *args: build
+  ./nssh {{ args }}
 
 # Install the xdg-open shim and ntfy config on a remote host.
 # Usage: just setup <host> [extra ssh args...]

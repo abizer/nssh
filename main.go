@@ -255,30 +255,38 @@ func main() {
 	defer cancel()
 	go subscribeNtfy(ctx, ntfyTopic, sshTarget, controlSocket)
 
-	// Interactive session reuses the control master socket.
-	ssh := exec.Command("ssh", append([]string{"-S", controlSocket}, sshArgs...)...)
-	ssh.Stdin, ssh.Stdout, ssh.Stderr = os.Stdin, os.Stdout, os.Stderr
+	// Interactive session: prefer mosh for connection persistence,
+	// fall back to plain ssh over the control socket.
+	var session *exec.Cmd
+	if moshPath, err := exec.LookPath("mosh"); err == nil {
+		sshCmd := fmt.Sprintf("ssh -S %s", controlSocket)
+		session = exec.Command(moshPath, "--ssh="+sshCmd, sshTarget)
+		fmt.Fprintf(os.Stderr, "nssh: using mosh for interactive session\n")
+	} else {
+		session = exec.Command("ssh", append([]string{"-S", controlSocket}, sshArgs...)...)
+	}
+	session.Stdin, session.Stdout, session.Stderr = os.Stdin, os.Stdout, os.Stderr
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	if err := ssh.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "nssh: ssh: %v\n", err)
+	if err := session.Start(); err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: session: %v\n", err)
 		os.Exit(1)
 	}
 
-	sshDone := make(chan error, 1)
-	go func() { sshDone <- ssh.Wait() }()
+	sessionDone := make(chan error, 1)
+	go func() { sessionDone <- session.Wait() }()
 
 	select {
-	case err := <-sshDone:
+	case err := <-sessionDone:
 		resetTerminal()
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}
 	case sig := <-sigs:
-		ssh.Process.Signal(sig)
-		<-sshDone
+		session.Process.Signal(sig)
+		<-sessionDone
 		resetTerminal()
 	}
 }
