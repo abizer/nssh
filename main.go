@@ -99,6 +99,18 @@ func proxyOAuthCallback(port, sshTarget, controlSocket string) {
 	fmt.Fprintf(os.Stderr, "nssh: OAuth callback on :%s done\n", port)
 }
 
+// resetTerminal disables mouse tracking modes that a remote tmux/vim may have
+// left enabled when the SSH connection drops before it can send the "off" sequences.
+func resetTerminal() {
+	os.Stdout.WriteString(
+		"\x1b[?1000l" + // normal tracking off
+			"\x1b[?1002l" + // button-event tracking off
+			"\x1b[?1003l" + // any-event tracking off
+			"\x1b[?1006l" + // SGR extended mode off
+			"\x1b[?25h", // cursor visible
+	)
+}
+
 func handleMessage(rawURL, sshTarget, controlSocket string) {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return
@@ -258,12 +270,14 @@ func main() {
 
 	select {
 	case err := <-sshDone:
+		resetTerminal()
 		if exitErr, ok := err.(*exec.ExitError); ok {
 			os.Exit(exitErr.ExitCode())
 		}
 	case sig := <-sigs:
 		ssh.Process.Signal(sig)
 		<-sshDone
+		resetTerminal()
 	}
 }
 
