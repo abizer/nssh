@@ -190,6 +190,8 @@ func startControlMaster(target, socket string) (*controlMaster, error) {
 		"-M", "-S", socket,
 		"-N",
 		"-o", "ControlPersist=no",
+		"-o", "ServerAliveInterval=15",
+		"-o", "ServerAliveCountMax=3",
 		target,
 	)
 	cm.cmd.Stderr = os.Stderr
