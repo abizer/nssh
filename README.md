@@ -1,6 +1,6 @@
 # ssh-reverse-ntfy
 
-Forward `xdg-open` calls from remote SSH sessions to your local browser, using [ntfy](https://ntfy.sh) as a message bus. OAuth flows (like `gh auth login`, `gcloud auth login`) complete automatically — including the localhost callback.
+Forward `xdg-open` calls from remote SSH sessions to your local browser, using [ntfy](https://ntfy.sh) as a message bus. OAuth flows (like `gh auth login`, `gcloud auth login`) complete automatically — including the localhost callback. Transparently uses `mosh` when both sides have it, for roaming across sleep/network changes; falls back to plain `ssh` otherwise.
 
 ```
 Remote Host                        ntfy                          Local Mac
@@ -44,23 +44,30 @@ For NixOS/home-manager hosts, the shim and config are managed automatically — 
 ## Usage
 
 ```bash
-nssh devbox                    # connect with URL forwarding
-xdg-open https://example.com  # opens in your local browser
-gh auth login --web            # OAuth flow completes locally, including callback
+nssh devbox                      # auto-select: mosh if available on both ends, else ssh
+nssh --ssh devbox                # force plain ssh (e.g. when mosh's UDP path is blocked)
+nssh --mosh devbox               # force mosh, skip the remote probe
+xdg-open https://example.com     # (inside the session) opens in your local browser
+gh auth login --web              # OAuth flow completes locally, including callback
 ```
 
 ## How It Works
 
 1. `nssh` resolves the SSH target hostname and derives the ntfy topic: `reverse-open-<hostname>`
-2. Starts an SSH ControlMaster for connection reuse (used later for OAuth proxying)
-3. Subscribes to the ntfy topic's JSON stream in the background
-4. Runs your interactive SSH session via the control socket
-5. On URL received:
+2. Subscribes to the ntfy topic's JSON stream in a background goroutine
+3. Picks a session transport:
+   - `--ssh` → plain ssh
+   - `--mosh` → mosh, skipping the probe
+   - default → probes the remote (`ssh host 'command -v mosh-server'`); uses mosh if both sides have it, otherwise ssh
+4. Runs the interactive session in the foreground, forwarding signals
+5. On URL received from ntfy:
    - If it contains `localhost:<port>` anywhere (including inside `redirect_uri` query params), starts a one-shot local listener on that port
    - Opens the URL in your local browser
-   - When the OAuth provider redirects the browser to `localhost:<port>`, proxies that single request to the remote VM via `ssh -W` — reusing the control master, no reauth
+   - When the OAuth provider redirects the browser to `localhost:<port>`, proxies that single request to the remote via a fresh `ssh -W` — one-shot, no shared state
    - Closes listener and tunnel immediately after the response
-6. On exit: ntfy subscription cancelled, control master torn down, socket removed — no orphan processes
+6. On exit: ntfy subscription cancelled, terminal modes reset — no orphan processes
+
+If mosh fails at runtime (e.g. UDP blocked by NAT on the remote's network, or remote shell breaks bootstrap), the error surfaces directly and you rerun with `--ssh` to fall back. nssh forces `LC_ALL=C.UTF-8` in mosh's environment to side-step the common "en_US.UTF-8 isn't available" failure on vanilla Linux remotes.
 
 ## Configuration
 
@@ -79,8 +86,8 @@ Self-host ntfy for additional isolation: [docs.ntfy.sh/install](https://docs.ntf
 
 ## Requirements
 
-- **Local:** macOS with `ssh`, Go (to build)
-- **Remote:** Linux with `curl` and `~/.local/bin` in PATH
+- **Local:** macOS with `ssh`, Go (to build). `mosh` is optional — nssh auto-detects it.
+- **Remote:** Linux with `curl` and `~/.local/bin` in PATH. Optional: `mosh-server` for roaming sessions.
 
 ## License
 

@@ -70,8 +70,12 @@ func extractLocalhostPort(rawURL string) string {
 }
 
 // proxyOAuthCallback listens on port, accepts exactly one connection,
-// proxies it to the same port on the remote via ssh -W, then closes everything.
-func proxyOAuthCallback(port, sshTarget, controlSocket string) {
+// proxies it to the same port on the remote via a fresh ssh -W, then closes
+// everything. Each forward is an independent ssh connection — no shared
+// control master — so OAuth callbacks survive network roams (sleep/wake,
+// WiFi change) and work identically regardless of whether the interactive
+// session is mosh or ssh.
+func proxyOAuthCallback(port, sshTarget string) {
 	ln, err := net.Listen("tcp", "localhost:"+port)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: listen :%s: %v\n", port, err)
@@ -86,8 +90,7 @@ func proxyOAuthCallback(port, sshTarget, controlSocket string) {
 	}
 	defer conn.Close()
 
-	// Tunnel to remote port via the existing control socket — no re-auth.
-	fwd := exec.Command("ssh", "-S", controlSocket, "-W",
+	fwd := exec.Command("ssh", "-W",
 		fmt.Sprintf("localhost:%s", port), sshTarget)
 	fwd.Stdin = conn
 	fwd.Stdout = conn
@@ -111,12 +114,12 @@ func resetTerminal() {
 	)
 }
 
-func handleMessage(rawURL, sshTarget, controlSocket string) {
+func handleMessage(rawURL, sshTarget string) {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return
 	}
 	if port := extractLocalhostPort(rawURL); port != "" {
-		go proxyOAuthCallback(port, sshTarget, controlSocket)
+		go proxyOAuthCallback(port, sshTarget)
 	}
 	if err := exec.Command("open", rawURL).Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: open: %v\n", err)
@@ -130,7 +133,7 @@ type ntfyMsg struct {
 
 // subscribeNtfy streams the ntfy JSON endpoint and dispatches incoming messages.
 // Reconnects automatically on failure.
-func subscribeNtfy(ctx context.Context, topic, sshTarget, controlSocket string) {
+func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
 	endpoint := ntfyBase() + "/" + topic + "/json"
 	client := &http.Client{}
 
@@ -163,7 +166,7 @@ func subscribeNtfy(ctx context.Context, topic, sshTarget, controlSocket string) 
 				continue
 			}
 			if msg.Event == "message" && msg.Message != "" {
-				go handleMessage(msg.Message, sshTarget, controlSocket)
+				go handleMessage(msg.Message, sshTarget)
 			}
 		}
 		resp.Body.Close()
@@ -176,59 +179,78 @@ func subscribeNtfy(ctx context.Context, topic, sshTarget, controlSocket string) 
 	}
 }
 
-// controlMaster manages a persistent SSH mux master process.
-type controlMaster struct {
-	cmd    *exec.Cmd
-	socket string
-	target string
-}
-
-func startControlMaster(target, socket string) (*controlMaster, error) {
-	os.Remove(socket)
-	cm := &controlMaster{socket: socket, target: target}
-	cm.cmd = exec.Command("ssh",
-		"-M", "-S", socket,
-		"-N",
-		"-o", "ControlPersist=no",
-		"-o", "ServerAliveInterval=15",
-		"-o", "ServerAliveCountMax=3",
-		target,
+// remoteHasMosh checks whether mosh-server exists on the remote host.
+// Uses BatchMode so it's non-interactive: hosts that need a password
+// prompt simply won't auto-upgrade to mosh, which is fine — the default
+// session selection falls back to ssh. If the user wants mosh anyway,
+// they can pass --mosh to skip this preflight.
+func remoteHasMosh(sshTarget string) bool {
+	cmd := exec.Command("ssh",
+		"-o", "BatchMode=yes",
+		sshTarget,
+		"command -v mosh-server >/dev/null 2>&1",
 	)
-	cm.cmd.Stderr = os.Stderr
-	if err := cm.cmd.Start(); err != nil {
-		return nil, fmt.Errorf("start control master: %w", err)
-	}
-	deadline := time.Now().Add(15 * time.Second)
-	for time.Now().Before(deadline) {
-		if exec.Command("ssh", "-S", socket, "-O", "check", target).Run() == nil {
-			return cm, nil
-		}
-		time.Sleep(200 * time.Millisecond)
-	}
-	cm.cmd.Process.Kill()
-	return nil, fmt.Errorf("control master: timed out waiting for %s", socket)
+	return cmd.Run() == nil
 }
 
-func (cm *controlMaster) close() {
-	if cm.cmd.Process != nil {
-		cm.cmd.Process.Signal(syscall.SIGTERM)
-		cm.cmd.Wait()
+// runSession runs an already-configured interactive session command
+// (mosh or ssh) in the foreground, forwarding SIGINT/SIGTERM/SIGHUP to
+// the child and waiting for it to exit.
+func runSession(cmd *exec.Cmd, sigs <-chan os.Signal) error {
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Start(); err != nil {
+		return err
 	}
-	os.Remove(cm.socket)
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	for {
+		select {
+		case err := <-done:
+			return err
+		case sig := <-sigs:
+			cmd.Process.Signal(sig)
+		}
+	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nssh <host> [ssh args...]")
+	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh] <host> [ssh args...]")
+	fmt.Fprintln(os.Stderr, "  --ssh   force plain ssh (skip mosh auto-detect)")
+	fmt.Fprintln(os.Stderr, "  --mosh  force mosh (skip remote preflight)")
 	os.Exit(1)
 }
 
 func main() {
-	if len(os.Args) < 2 {
+	// Parse our own flags before the ssh target. Only --ssh and --mosh
+	// are recognized; anything else falls through to ssh's argument list.
+	args := os.Args[1:]
+	forceSSH := false
+	forceMosh := false
+	for len(args) > 0 {
+		switch args[0] {
+		case "--ssh":
+			forceSSH = true
+			args = args[1:]
+			continue
+		case "--mosh":
+			forceMosh = true
+			args = args[1:]
+			continue
+		case "-h", "--help":
+			usage()
+		}
+		break
+	}
+	if forceSSH && forceMosh {
+		fmt.Fprintln(os.Stderr, "nssh: --ssh and --mosh are mutually exclusive")
+		os.Exit(1)
+	}
+	if len(args) < 1 {
 		usage()
 	}
 
-	sshArgs := os.Args[1:]
-	sshTarget := os.Args[1]
+	sshArgs := args
+	sshTarget := args[0]
 
 	shortHost := resolveShortHost(sshArgs)
 	if shortHost == "" {
@@ -240,54 +262,49 @@ func main() {
 	}
 
 	ntfyTopic := "reverse-open-" + shortHost
-	controlSocket := fmt.Sprintf("/tmp/.nssh-%s.sock", shortHost)
 
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s/%s\n", ntfyBase(), ntfyTopic)
 
-	cm, err := startControlMaster(sshTarget, controlSocket)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
-		os.Exit(1)
-	}
-	defer cm.close()
-
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go subscribeNtfy(ctx, ntfyTopic, sshTarget, controlSocket)
-
-	// Interactive session: prefer mosh for connection persistence,
-	// fall back to plain ssh over the control socket.
-	var session *exec.Cmd
-	if moshPath, err := exec.LookPath("mosh"); err == nil {
-		sshCmd := fmt.Sprintf("ssh -S %s", controlSocket)
-		session = exec.Command(moshPath, "--ssh="+sshCmd, sshTarget)
-		fmt.Fprintf(os.Stderr, "nssh: using mosh for interactive session\n")
-	} else {
-		session = exec.Command("ssh", append([]string{"-S", controlSocket}, sshArgs...)...)
-	}
-	session.Stdin, session.Stdout, session.Stderr = os.Stdin, os.Stdout, os.Stderr
+	go subscribeNtfy(ctx, ntfyTopic, sshTarget)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	if err := session.Start(); err != nil {
-		fmt.Fprintf(os.Stderr, "nssh: session: %v\n", err)
-		os.Exit(1)
+	// Pick the session transport.
+	//   --ssh      → always ssh
+	//   --mosh     → always mosh (trust the user; skip preflight)
+	//   (default)  → mosh if local + remote both have it; otherwise ssh
+	// If mosh fails at runtime, the user re-runs with --ssh.
+	useMosh := false
+	switch {
+	case forceSSH:
+		// stay false
+	case forceMosh:
+		useMosh = true
+	default:
+		if _, err := exec.LookPath("mosh"); err == nil && remoteHasMosh(sshTarget) {
+			useMosh = true
+		}
 	}
 
-	sessionDone := make(chan error, 1)
-	go func() { sessionDone <- session.Wait() }()
+	var session *exec.Cmd
+	if useMosh {
+		fmt.Fprintln(os.Stderr, "nssh: using mosh for interactive session")
+		session = exec.Command("mosh", sshTarget)
+		// Force a universally-available UTF-8 locale — side-steps the
+		// "en_US.UTF-8 isn't available" mosh-server error on vanilla
+		// Linux remotes (including Nix-installed mosh without glibcLocales).
+		session.Env = append(os.Environ(), "LC_ALL=C.UTF-8", "LANG=C.UTF-8")
+	} else {
+		session = exec.Command("ssh", sshArgs...)
+	}
 
-	select {
-	case err := <-sessionDone:
-		resetTerminal()
-		if exitErr, ok := err.(*exec.ExitError); ok {
-			os.Exit(exitErr.ExitCode())
-		}
-	case sig := <-sigs:
-		session.Process.Signal(sig)
-		<-sessionDone
-		resetTerminal()
+	err := runSession(session, sigs)
+	resetTerminal()
+	if exitErr, ok := err.(*exec.ExitError); ok {
+		os.Exit(exitErr.ExitCode())
 	}
 }
 
