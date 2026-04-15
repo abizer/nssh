@@ -29,5 +29,15 @@ jobs:
         with:
           name: abizer
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          # Disable the daemon-mode post-step push; we push explicitly
+          # below so the job fails hard on push errors instead of racing
+          # the runner teardown (the darwin job hit a drain-timeout and
+          # silently dropped the final store path).
+          skipPush: true
 
-      - run: nix build .#packages.${{ matrix.system }}.default --print-out-paths
+      - name: Build and push
+        env:
+          CACHIX_AUTH_TOKEN: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        run: |
+          nix build .#packages.${{ matrix.system }}.default --print-out-paths \
+            | cachix push abizer
