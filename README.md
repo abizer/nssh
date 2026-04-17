@@ -1,5 +1,7 @@
 # nssh
 
+_Written by [Claude Opus 4.7](https://www.anthropic.com/news/claude-opus-4-7) via Claude Code_
+
 Paste images into [Claude Code](https://claude.ai/claude-code) over SSH. Also bridges text clipboard, `xdg-open` URLs, and OAuth callbacks between remote sessions and your local machine — over SSH or mosh.
 
 ## The problem
