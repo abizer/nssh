@@ -232,13 +232,21 @@ func usage() {
 	os.Exit(1)
 }
 
+// buildVersion is set by ldflags at release build time (e.g. in the homebrew
+// formula). For go install / go build with a tagged module it's empty and we
+// fall back to debug.ReadBuildInfo.
+var buildVersion string
+
 func printVersion() {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		fmt.Println("nssh (build info unavailable)")
 		return
 	}
-	v := info.Main.Version
+	v := buildVersion
+	if v == "" {
+		v = info.Main.Version
+	}
 	if v == "" {
 		v = "(devel)"
 	}

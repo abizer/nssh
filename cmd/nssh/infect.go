@@ -16,6 +16,9 @@ import (
 // builds (local dev) it returns "(devel)" or a version with "+dirty" suffix
 // and we fall back to the latest release on GitHub.
 func version() string {
+	if buildVersion != "" {
+		return buildVersion
+	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ""
