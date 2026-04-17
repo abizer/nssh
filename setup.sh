@@ -2,6 +2,8 @@
 # Install nssh + clipboard/xdg-open symlinks on a remote host.
 # Usage: ./setup.sh <host> [extra ssh args...]
 # Expects nssh-linux to be already built (the justfile handles this).
+# No config is written — nssh writes a per-connection session file at
+# connect time with the ntfy server and topic.
 set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
@@ -17,24 +19,14 @@ if [[ ! -f "$BINARY" ]]; then
   exit 1
 fi
 
-ntfy_base="${NSSH_NTFY_BASE:-https://ntfy.abizer.dev}"
-short_host="$(ssh -G "$@" 2>/dev/null | awk '/^hostname /{print $2}' | cut -d. -f1)"
-
-if [[ -z "$short_host" ]]; then
-  echo "nssh: could not determine remote hostname" >&2
-  exit 1
-fi
-
-ntfy_url="${ntfy_base}/reverse-open-${short_host}"
-echo "nssh: installing on $1 (topic: ${ntfy_url})"
+echo "nssh: installing on $1"
 
 # Copy the cross-compiled binary to the remote.
 scp -q "$BINARY" "$1:~/.local/bin/nssh"
 
-# Set up symlinks and config on the remote.
-ssh "$@" bash -s -- "$ntfy_url" << 'REMOTE'
+# Set up symlinks on the remote.
+ssh "$@" bash -s << 'REMOTE'
 set -euo pipefail
-ntfy_url="$1"
 
 mkdir -p ~/.local/bin
 chmod +x ~/.local/bin/nssh
@@ -44,15 +36,8 @@ for name in xdg-open sensible-browser xclip wl-copy wl-paste; do
   ln -sf ~/.local/bin/nssh ~/.local/bin/"$name"
 done
 
-# Write the ntfy config.
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nssh"
-cat > "${XDG_CONFIG_HOME:-$HOME/.config}/nssh/config.toml" << EOF
-url = "$ntfy_url"
-EOF
-
 echo "Installed nssh to ~/.local/bin/"
 echo "  Symlinks: xdg-open, sensible-browser, xclip, wl-copy, wl-paste"
-echo "  Configured ntfy endpoint: $ntfy_url"
 echo "  Ensure ~/.local/bin is in your PATH (before /usr/bin)"
 REMOTE
 

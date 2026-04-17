@@ -43,7 +43,8 @@ just test           # runs all tests
 ### Session mode (local)
 
 - Wraps `ssh` or `mosh` with automatic transport selection
-- Subscribes to `ntfy.abizer.dev/reverse-open-<host>` in a background goroutine
+- Generates a random topic (or reads a pinned one from config), writes it to
+  the remote's `~/.config/nssh/session`, subscribes to ntfy in a background goroutine
 - Dispatches incoming messages by `kind`:
   - `open`: opens URL locally, proxies OAuth callbacks via fresh `ssh -W`
   - `clip-write`: writes to macOS clipboard (text via pbcopy, images via osascript)
@@ -75,12 +76,21 @@ and images are sent as ntfy attachments (PUT with `Filename` + `X-Message` heade
 
 ### Topic convention
 
-`<NSSH_NTFY_BASE>/reverse-open-<short-hostname>` — defaults to
-`https://ntfy.abizer.dev`, overridable via `NSSH_NTFY_BASE`.
+Each connection gets a random topic (`nssh_<random>`) by default — unguessable,
+no config required. nssh writes the server + topic to `~/.config/nssh/session`
+on the remote before launching the shell. The shim reads this file.
+
+Optional `~/.config/nssh/config.toml` on either side to pin values:
+```toml
+server = "https://ntfy.example.com"  # default: https://ntfy.sh
+topic = "my-fixed-topic"             # default: random per-connection
+```
+
+Priority: `NSSH_NTFY_BASE` env > config.toml > session file > defaults.
 
 ## Key constraints
 
 - stdlib only — no external Go dependencies
-- nssh-shim must cross-compile as a static binary with zero runtime deps
+- Single binary cross-compiles for macOS and Linux with zero runtime deps
 - Never eval or execute received content on local side
 - Only bridge CLIPBOARD selection, not PRIMARY
