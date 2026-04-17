@@ -145,6 +145,67 @@ func downloadBinary(tag, goos, goarch string) (string, error) {
 	return cachePath, nil
 }
 
+// probeRemoteVersion SSHes in (login shell for PATH) and runs `nssh --version`
+// on the remote. Returns the version string (e.g. "v1.3.0") and whether nssh
+// is installed. A missing binary returns ("", false). Errors probing (network,
+// auth) also return ("", false) — best effort, non-fatal.
+func probeRemoteVersion(sshTarget string) (ver string, installed bool) {
+	out, err := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget,
+		`bash -l -c 'command -v nssh >/dev/null 2>&1 && nssh --version 2>&1 | head -1'`,
+	).Output()
+	if err != nil {
+		return "", false
+	}
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return "", false
+	}
+	// Expected: "nssh v1.3.0" or "nssh (devel)" etc.
+	parts := strings.Fields(line)
+	if len(parts) < 2 {
+		return "", false
+	}
+	return parts[1], true
+}
+
+// promptYes returns true if stdin is a TTY and the user answers yes.
+// On non-TTY input (e.g. scripted invocations), returns false silently.
+func promptYes(msg string) bool {
+	stat, err := os.Stdin.Stat()
+	if err != nil || stat.Mode()&os.ModeCharDevice == 0 {
+		return false
+	}
+	fmt.Fprintf(os.Stderr, "%s [y/N] ", msg)
+	var resp string
+	fmt.Scanln(&resp)
+	resp = strings.ToLower(strings.TrimSpace(resp))
+	return resp == "y" || resp == "yes"
+}
+
+// checkRemoteVersion probes the remote's nssh version and warns if missing
+// or mismatched. Prompts to --infect if on a TTY. Non-fatal on any error.
+func checkRemoteVersion(sshTarget string) {
+	localVer := version()
+	if !looksLikeSemver(localVer) {
+		// Dev build — can't meaningfully compare versions.
+		return
+	}
+	remoteVer, installed := probeRemoteVersion(sshTarget)
+	if !installed {
+		fmt.Fprintln(os.Stderr, "nssh: not installed on remote — clipboard bridge will not work")
+		if promptYes("  install it now?") {
+			infect(sshTarget)
+		}
+		return
+	}
+	if remoteVer != localVer {
+		fmt.Fprintf(os.Stderr, "nssh: remote version %s, local %s\n", remoteVer, localVer)
+		if promptYes("  update remote to " + localVer + "?") {
+			infect(sshTarget)
+		}
+	}
+}
+
 func infect(sshTarget string) {
 	// 1. Detect remote arch.
 	goos, goarch, err := resolveRemoteArch(sshTarget)

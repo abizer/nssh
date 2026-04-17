@@ -356,6 +356,10 @@ func nsshMain() {
 		return
 	}
 
+	// Version check before session starts — warns if the remote's nssh is
+	// missing or mismatched, offers to re-infect on TTY.
+	checkRemoteVersion(sshTarget)
+
 	cfg := loadConfig()
 	if cfg.Topic == "" {
 		cfg.Topic = generateTopic()
