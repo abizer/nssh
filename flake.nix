@@ -25,22 +25,6 @@
               mainProgram = "nssh";
             };
           };
-
-          nssh-shim = pkgs.buildGoModule {
-            pname = "nssh-shim";
-            version = self.shortRev or self.dirtyShortRev or "dev";
-            src = self;
-            vendorHash = null;
-            subPackages = [ "cmd/nssh-shim" ];
-
-            meta = {
-              description = "Remote clipboard/xdg-open shim for nssh (symlinked as xclip, wl-copy, etc.)";
-              homepage = "https://github.com/abizer/ssh-reverse-ntfy";
-              license = pkgs.lib.licenses.mit;
-              mainProgram = "nssh-shim";
-            };
-          };
-
           default = self.packages.${system}.nssh;
         }
       );

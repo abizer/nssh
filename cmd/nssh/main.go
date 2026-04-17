@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"syscall"
@@ -205,6 +206,17 @@ func usage() {
 }
 
 func main() {
+	persona := filepath.Base(os.Args[0])
+	switch persona {
+	case "xdg-open", "sensible-browser", "xclip", "wl-copy", "wl-paste":
+		shimMain(persona, os.Args[1:])
+		return
+	}
+	// Default: nssh session mode (works regardless of binary name).
+	nsshMain()
+}
+
+func nsshMain() {
 	args := os.Args[1:]
 	forceSSH := false
 	forceMosh := false

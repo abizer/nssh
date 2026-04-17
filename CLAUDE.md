@@ -1,37 +1,46 @@
 # CLAUDE.md
 
-Go multi-binary project: `nssh` (local Mac side) and `nssh-shim` (remote Linux
-side). Together they bridge clipboard, `xdg-open` URLs, and OAuth callbacks
-between local macOS and remote VMs over ntfy pub/sub — surviving mosh, NAT,
-and network roaming.
+Single Go binary (`nssh`) that runs everywhere. On the local side it wraps
+SSH/mosh sessions and subscribes to ntfy for incoming clipboard and URL
+messages. On remote hosts the same binary is symlinked as `xclip`, `wl-copy`,
+`wl-paste`, and `xdg-open` — dispatching on `argv[0]` to act as a clipboard
+bridge and URL forwarder over ntfy pub/sub.
 
 ## Repo layout
 
 ```
-cmd/nssh/              Local-side binary (SSH/mosh wrapper, ntfy subscriber)
-cmd/nssh-shim/         Remote-side binary (symlinked as xclip, wl-copy, xdg-open, etc.)
+cmd/nssh/              The single binary (session wrapper + shim, dispatched on argv[0])
 internal/wire/         Shared envelope type and parser
 internal/ntfy/         Shared ntfy HTTP helpers (publish, attach, fetch)
 internal/clipboard/    macOS pasteboard helpers (pbcopy, pbpaste, pngpaste, osascript)
 docs/                  Design docs
-setup.sh               Installs nssh-shim + symlinks + config on a remote host
+setup.sh               Cross-compiles + installs nssh + symlinks on a remote host
 justfile               Build recipes
-flake.nix              Nix packages for nssh and nssh-shim
+flake.nix              Nix package
 ```
 
 ## Building
 
 ```bash
-just build          # builds nssh + nssh-shim for local platform
-just build-linux    # cross-compiles nssh-shim for linux/amd64
+just build          # builds nssh for local platform
+just build-linux    # cross-compiles nssh for linux/amd64
 just install        # copies nssh to ~/.local/bin/ and ad-hoc signs it
-just setup <host>   # cross-compiles shim + scp + symlinks on remote
+just setup <host>   # cross-compiles + scp + symlinks on remote
 just test           # runs all tests
 ```
 
 ## Architecture
 
-### nssh (local, macOS)
+### Dispatch on argv[0]
+
+| argv[0] | Mode | Description |
+|---------|------|-------------|
+| `nssh` (or anything else) | session | SSH/mosh wrapper + ntfy subscriber |
+| `xclip` | shim | Clipboard bridge via ntfy |
+| `wl-copy` / `wl-paste` | shim | Wayland clipboard bridge via ntfy |
+| `xdg-open` / `sensible-browser` | shim | URL forwarding via ntfy |
+
+### Session mode (local)
 
 - Wraps `ssh` or `mosh` with automatic transport selection
 - Subscribes to `ntfy.abizer.dev/reverse-open-<host>` in a background goroutine
@@ -40,9 +49,8 @@ just test           # runs all tests
   - `clip-write`: writes to macOS clipboard (text via pbcopy, images via osascript)
   - `clip-read-request`: reads macOS clipboard, publishes response back to ntfy
 
-### nssh-shim (remote, Linux)
+### Shim mode (remote)
 
-- Single static binary, symlinked as `xdg-open`, `xclip`, `wl-copy`, `wl-paste`
 - Dispatches on `os.Args[0]` (persona), parses the relevant CLI flags
 - Publishes clipboard data / URL open requests to ntfy as JSON envelopes
 - For clipboard reads: publishes a request with correlation ID, subscribes to

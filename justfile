@@ -4,10 +4,9 @@ go_arch := if arch() == "aarch64" { "arm64" } else { arch() }
 
 build:
   go build -o nssh ./cmd/nssh
-  go build -o nssh-shim ./cmd/nssh-shim
 
 build-linux:
-  GOOS=linux GOARCH=amd64 go build -o nssh-shim-linux ./cmd/nssh-shim
+  GOOS=linux GOARCH=amd64 go build -o nssh-linux ./cmd/nssh
 
 install: build
   cp nssh $HOME/.local/bin/nssh
@@ -19,6 +18,6 @@ run *args: build
 test:
   go test ./...
 
-# Install the nssh-shim binary and ntfy config on a remote host.
+# Install nssh on a remote host and set up clipboard/xdg-open symlinks.
 setup host *args: build-linux
   bash setup.sh {{host}} {{args}}

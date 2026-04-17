@@ -28,13 +28,12 @@ func readConfig() string {
 	path := filepath.Join(dir, "ssh-ntfy", "config.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nssh-shim: cannot read %s: %v\n", path, err)
+		fmt.Fprintf(os.Stderr, "nssh: cannot read %s: %v\n", path, err)
 		os.Exit(1)
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if strings.HasPrefix(line, "url") {
-			// url = "https://..."
 			if idx := strings.Index(line, `"`); idx >= 0 {
 				end := strings.LastIndex(line, `"`)
 				if end > idx {
@@ -43,18 +42,15 @@ func readConfig() string {
 			}
 		}
 	}
-	fmt.Fprintf(os.Stderr, "nssh-shim: no url found in %s\n", path)
+	fmt.Fprintf(os.Stderr, "nssh: no url found in %s\n", path)
 	os.Exit(1)
 	return ""
 }
 
-const inlineThreshold = 3 * 1024
-
-// clipWrite reads data from stdin and publishes a clip-write message.
-func clipWrite(topicURL, mime string) {
+func shimClipWrite(topicURL, mime string) {
 	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nssh-shim: read stdin: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nssh: read stdin: %v\n", err)
 		os.Exit(1)
 	}
 	if len(data) == 0 {
@@ -69,7 +65,7 @@ func clipWrite(topicURL, mime string) {
 		}
 		body, _ := json.Marshal(env)
 		if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
-			fmt.Fprintf(os.Stderr, "nssh-shim: %v\n", err)
+			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
@@ -80,26 +76,23 @@ func clipWrite(topicURL, mime string) {
 			filename = "clip.png"
 		}
 		if err := ntfy.PublishAttachment(topicURL, string(msg), data, filename); err != nil {
-			fmt.Fprintf(os.Stderr, "nssh-shim: %v\n", err)
+			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
 			os.Exit(1)
 		}
 	}
 }
 
-// clipRead publishes a clip-read-request and waits for the response.
-func clipRead(topicURL, mime string) {
+func shimClipRead(topicURL, mime string) {
 	id := strconv.FormatInt(time.Now().UnixNano(), 36)
 	since := strconv.FormatInt(time.Now().Unix(), 10)
 
-	// Publish the read request.
 	req := wire.Envelope{Kind: "clip-read-request", ID: id, Mime: mime}
 	body, _ := json.Marshal(req)
 	if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
-		fmt.Fprintf(os.Stderr, "nssh-shim: publish read request: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nssh: publish read request: %v\n", err)
 		os.Exit(1)
 	}
 
-	// Subscribe to the topic with a 5-second timeout, looking for our response.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -107,7 +100,7 @@ func clipRead(topicURL, mime string) {
 	httpReq, _ := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
 	resp, err := http.DefaultClient.Do(httpReq)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nssh-shim: subscribe: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nssh: subscribe: %v\n", err)
 		os.Exit(1)
 	}
 	defer resp.Body.Close()
@@ -125,12 +118,10 @@ func clipRead(topicURL, mime string) {
 		if !ok || env.Kind != "clip-read-response" || env.ID != id {
 			continue
 		}
-
-		// Got our response.
 		if env.Body != "" {
 			data, err := base64.StdEncoding.DecodeString(env.Body)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "nssh-shim: decode response: %v\n", err)
+				fmt.Fprintf(os.Stderr, "nssh: decode response: %v\n", err)
 				os.Exit(1)
 			}
 			if strings.HasPrefix(string(data), "ERROR: ") {
@@ -143,25 +134,23 @@ func clipRead(topicURL, mime string) {
 		if msg.Attachment != nil && msg.Attachment.URL != "" {
 			data, err := ntfy.FetchAttachment(msg.Attachment.URL)
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "nssh-shim: fetch attachment: %v\n", err)
+				fmt.Fprintf(os.Stderr, "nssh: fetch attachment: %v\n", err)
 				os.Exit(1)
 			}
 			os.Stdout.Write(data)
 			return
 		}
-		// Empty response = empty clipboard.
 		return
 	}
 
-	fmt.Fprintln(os.Stderr, "nssh-shim: clipboard read timed out")
+	fmt.Fprintln(os.Stderr, "nssh: clipboard read timed out")
 	os.Exit(1)
 }
 
-// -- personas --
+// -- shim personas --
 
 func doXdgOpen(args []string) {
 	if len(args) == 0 || (!strings.HasPrefix(args[0], "http://") && !strings.HasPrefix(args[0], "https://")) {
-		// Fall through to real xdg-open.
 		cmd := execFallback("xdg-open", args)
 		cmd.Run()
 		os.Exit(cmd.ProcessState.ExitCode())
@@ -170,7 +159,6 @@ func doXdgOpen(args []string) {
 	env := wire.Envelope{Kind: "open", URL: args[0]}
 	body, _ := json.Marshal(env)
 	if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
-		// Fall through on failure.
 		cmd := execFallback("xdg-open", args)
 		cmd.Run()
 		os.Exit(cmd.ProcessState.ExitCode())
@@ -201,19 +189,16 @@ func doXclip(args []string) {
 		case "-f", "-filter":
 			direction = "in"
 		case "-l", "-loops":
-			i++ // skip value
+			i++
 		}
 	}
 
-	// Only bridge CLIPBOARD selection. PRIMARY/others fall through.
 	if selection != "" && selection != "clipboard" {
 		cmd := execFallback("xclip", args)
 		cmd.Run()
 		os.Exit(cmd.ProcessState.ExitCode())
 	}
 
-	// TARGETS query: return the types our bridge supports. Apps like Claude
-	// Code probe this before attempting an image read.
 	if direction == "out" && mime == "TARGETS" {
 		fmt.Println("TARGETS")
 		fmt.Println("image/png")
@@ -226,9 +211,9 @@ func doXclip(args []string) {
 	topicURL := readConfig()
 	switch direction {
 	case "in":
-		clipWrite(topicURL, mime)
+		shimClipWrite(topicURL, mime)
 	case "out":
-		clipRead(topicURL, mime)
+		shimClipRead(topicURL, mime)
 	}
 }
 
@@ -241,7 +226,7 @@ func doWlCopy(args []string) {
 		}
 	}
 	topicURL := readConfig()
-	clipWrite(topicURL, mime)
+	shimClipWrite(topicURL, mime)
 }
 
 func doWlPaste(args []string) {
@@ -253,12 +238,10 @@ func doWlPaste(args []string) {
 		}
 	}
 	topicURL := readConfig()
-	clipRead(topicURL, mime)
+	shimClipRead(topicURL, mime)
 }
 
-// execFallback finds the real binary in PATH (skipping our own) and execs it.
 func execFallback(name string, args []string) *exec.Cmd {
-	// Look for the real binary, skipping ~/.local/bin where we live.
 	cmd := exec.Command("/usr/bin/"+name, args...)
 	cmd.Stdin = os.Stdin
 	cmd.Stdout = os.Stdout
@@ -266,12 +249,9 @@ func execFallback(name string, args []string) *exec.Cmd {
 	return cmd
 }
 
-func main() {
-	persona := filepath.Base(os.Args[0])
-	args := os.Args[1:]
-
+func shimMain(persona string, args []string) {
 	switch persona {
-	case "xdg-open":
+	case "xdg-open", "sensible-browser":
 		doXdgOpen(args)
 	case "xclip":
 		doXclip(args)
@@ -279,10 +259,5 @@ func main() {
 		doWlCopy(args)
 	case "wl-paste":
 		doWlPaste(args)
-	case "sensible-browser":
-		doXdgOpen(args)
-	default:
-		fmt.Fprintf(os.Stderr, "nssh-shim: unknown persona %q (invoke via symlink)\n", persona)
-		os.Exit(2)
 	}
 }

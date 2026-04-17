@@ -22,8 +22,8 @@ Remote Host                        ntfy                          Local Mac
 
 **Local (macOS):**
 ```bash
-just build     # builds ./nssh and ./nssh-shim
-just install   # copies nssh to ~/.local/bin/ and ad-hoc signs it
+just build     # builds ./nssh
+just install   # copies to ~/.local/bin/nssh and ad-hoc signs it
 
 # Optional: for clipboard image support
 brew install pngpaste
@@ -34,7 +34,7 @@ brew install pngpaste
 just setup devbox
 ```
 
-This cross-compiles `nssh-shim` for linux/amd64, copies it to the remote host, and sets up symlinks (`xdg-open`, `xclip`, `wl-copy`, `wl-paste`) plus the ntfy config. Ensure `~/.local/bin` is in PATH on the remote (before `/usr/bin`).
+This cross-compiles `nssh` for linux/amd64, copies it to the remote host, and symlinks it as `xdg-open`, `xclip`, `wl-copy`, `wl-paste`. Ensure `~/.local/bin` is in PATH on the remote (before `/usr/bin`).
 
 ## Usage
 
@@ -55,16 +55,17 @@ Claude Code image paste (Ctrl+V) works automatically — CC calls `xclip` under 
 
 ## Architecture
 
-Two Go binaries:
+One binary, everywhere. `nssh` dispatches on `argv[0]`:
 
-| Binary | Runs on | Role |
-|--------|---------|------|
-| `nssh` | Local Mac | SSH/mosh wrapper, ntfy subscriber, clipboard reader/writer |
-| `nssh-shim` | Remote Linux | Symlinked as `xclip`/`wl-copy`/`wl-paste`/`xdg-open`, publishes to ntfy |
+| argv[0] | Mode | Description |
+|---------|------|-------------|
+| `nssh` (or anything else) | session | SSH/mosh wrapper + ntfy subscriber |
+| `xclip` | shim | Clipboard bridge via ntfy |
+| `wl-copy` / `wl-paste` | shim | Wayland clipboard bridge |
+| `xdg-open` / `sensible-browser` | shim | URL forwarding |
 
 ```
-cmd/nssh/              Local-side binary
-cmd/nssh-shim/         Remote-side binary (cross-compiled, statically linked)
+cmd/nssh/              The single binary
 internal/wire/         Shared JSON envelope type
 internal/ntfy/         Shared ntfy HTTP helpers
 internal/clipboard/    macOS pasteboard helpers (pbcopy, pngpaste, osascript)
@@ -102,7 +103,7 @@ Self-host ntfy for isolation: [docs.ntfy.sh/install](https://docs.ntfy.sh/instal
 ## Requirements
 
 - **Local:** macOS, Go (to build), `pngpaste` (for clipboard images — `brew install pngpaste`)
-- **Remote:** Linux with `~/.local/bin` in PATH. No runtime dependencies — `nssh-shim` is a static Go binary.
+- **Remote:** Linux with `~/.local/bin` in PATH. No runtime dependencies — nssh cross-compiles as a static Go binary.
 - **Optional:** `mosh` on both ends for session roaming
 
 ## License
