@@ -6,16 +6,15 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/abizer/ssh-reverse-ntfy/internal/clipboard"
+	"github.com/abizer/ssh-reverse-ntfy/internal/ntfy"
+	"github.com/abizer/ssh-reverse-ntfy/internal/wire"
 )
 
-// inlineThreshold is the max decoded size (bytes) for base64-inlined payloads.
-// Anything larger goes via ntfy attachment.
 const inlineThreshold = 3 * 1024
 
-// handleClipWrite receives clipboard data from a remote VM and writes it to
-// the macOS pasteboard. Data arrives either inline (base64 in env.Body) or as
-// an ntfy attachment (binary at attachment.URL).
-func handleClipWrite(env envelope, att *ntfyAttachment) {
+func handleClipWrite(env wire.Envelope, att *ntfy.Attachment) {
 	var data []byte
 	var err error
 
@@ -27,7 +26,7 @@ func handleClipWrite(env envelope, att *ntfyAttachment) {
 			return
 		}
 	case att != nil && att.URL != "":
-		data, err = fetchAttachment(att.URL)
+		data, err = ntfy.FetchAttachment(att.URL)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: clip-write: %v\n", err)
 			return
@@ -43,20 +42,17 @@ func handleClipWrite(env envelope, att *ntfyAttachment) {
 	}
 
 	if strings.HasPrefix(mime, "image/png") {
-		if err := writeImagePNG(data); err != nil {
+		if err := clipboard.WriteImagePNG(data); err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: clip-write image: %v\n", err)
 		}
 	} else {
-		if err := writeText(data); err != nil {
+		if err := clipboard.WriteText(data); err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: clip-write text: %v\n", err)
 		}
 	}
 }
 
-// handleClipReadRequest reads the macOS clipboard and publishes a
-// clip-read-response back to the ntfy topic. The response correlates with
-// the request via env.ID.
-func handleClipReadRequest(env envelope, topicURL string) {
+func handleClipReadRequest(env wire.Envelope, topicURL string) {
 	mime := env.Mime
 	if mime == "" {
 		mime = "text/plain"
@@ -65,26 +61,25 @@ func handleClipReadRequest(env envelope, topicURL string) {
 	var data []byte
 	var err error
 	if strings.HasPrefix(mime, "image/png") {
-		data, err = readImagePNG()
+		data, err = clipboard.ReadImagePNG()
 	} else {
-		data, err = readText()
+		data, err = clipboard.ReadText()
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: clip-read: %v\n", err)
-		publishErrorResponse(topicURL, env.ID, err.Error())
+		resp := wire.Envelope{Kind: "clip-read-response", ID: env.ID}
+		resp.Body = base64.StdEncoding.EncodeToString([]byte("ERROR: " + err.Error()))
+		body, _ := json.Marshal(resp)
+		ntfy.PublishMessage(topicURL, string(body))
 		return
 	}
 
-	resp := envelope{
-		Kind: "clip-read-response",
-		ID:   env.ID,
-		Mime: mime,
-	}
+	resp := wire.Envelope{Kind: "clip-read-response", ID: env.ID, Mime: mime}
 
 	if len(data) <= inlineThreshold && !strings.HasPrefix(mime, "image/") {
 		resp.Body = base64.StdEncoding.EncodeToString(data)
 		body, _ := json.Marshal(resp)
-		if err := publishMessage(topicURL, string(body)); err != nil {
+		if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: clip-read response: %v\n", err)
 		}
 	} else {
@@ -93,19 +88,8 @@ func handleClipReadRequest(env envelope, topicURL string) {
 		if strings.HasPrefix(mime, "image/png") {
 			filename = "clip.png"
 		}
-		if err := publishAttachment(topicURL, string(respJSON), data, filename); err != nil {
+		if err := ntfy.PublishAttachment(topicURL, string(respJSON), data, filename); err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: clip-read response: %v\n", err)
 		}
 	}
-}
-
-func publishErrorResponse(topicURL, id, errMsg string) {
-	resp := envelope{
-		Kind: "clip-read-response",
-		ID:   id,
-	}
-	// Stuff the error into Body with a prefix the shim can detect.
-	resp.Body = base64.StdEncoding.EncodeToString([]byte("ERROR: " + errMsg))
-	body, _ := json.Marshal(resp)
-	publishMessage(topicURL, string(body))
 }

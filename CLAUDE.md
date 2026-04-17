@@ -1,69 +1,74 @@
 # CLAUDE.md
 
-Go binary (`nssh`) that forwards `xdg-open` URLs from remote SSH sessions to
-the local browser via ntfy pub/sub, with automatic one-shot OAuth port
-proxying. Wraps `mosh` when both ends have it (for session roaming across
-sleep/network changes), or falls back to plain `ssh`.
+Go multi-binary project: `nssh` (local Mac side) and `nssh-shim` (remote Linux
+side). Together they bridge clipboard, `xdg-open` URLs, and OAuth callbacks
+between local macOS and remote VMs over ntfy pub/sub — surviving mosh, NAT,
+and network roaming.
+
+## Repo layout
+
+```
+cmd/nssh/              Local-side binary (SSH/mosh wrapper, ntfy subscriber)
+cmd/nssh-shim/         Remote-side binary (symlinked as xclip, wl-copy, xdg-open, etc.)
+internal/wire/         Shared envelope type and parser
+internal/ntfy/         Shared ntfy HTTP helpers (publish, attach, fetch)
+internal/clipboard/    macOS pasteboard helpers (pbcopy, pbpaste, pngpaste, osascript)
+docs/                  Design docs
+setup.sh               Installs nssh-shim + symlinks + config on a remote host
+justfile               Build recipes
+flake.nix              Nix packages for nssh and nssh-shim
+```
+
+## Building
+
+```bash
+just build          # builds cmd/nssh for local platform
+just build-shim     # cross-compiles cmd/nssh-shim for linux/amd64
+just setup <host>   # builds shim + scp + symlinks on remote
+just test           # runs all tests
+```
 
 ## Architecture
 
-- `main.go` — the `nssh` binary. Replaces the old shell `nssh` function.
-  - Parses optional `--ssh` / `--mosh` flags to force a transport
-  - Resolves short hostname via `ssh -G` (for the ntfy topic)
-  - Subscribes to the ntfy JSON stream for the host's topic in a goroutine
-  - Picks session transport: `--ssh` forces ssh; `--mosh` forces mosh; default
-    probes `remoteHasMosh` and picks mosh if both sides have it
-  - Runs the interactive session (mosh or ssh) in the foreground via
-    `runSession`, forwarding SIGINT/SIGTERM/SIGHUP to the child
-  - On URL received from ntfy: if a `localhost:<port>` is found anywhere in
-    the URL (including inside query params like `redirect_uri`), starts
-    `proxyOAuthCallback` in a goroutine
-  - On exit: ntfy context cancelled, terminal mouse-tracking modes reset
-- `setup.sh` — bootstraps a remote host: installs the `xdg-open` shim to
-  `~/.local/bin/` and writes `config.toml`. Called via `just setup <host>`.
-- `shell.zsh` — stub, sourced by dotfiles for compatibility. No logic remains.
-- `justfile` — `build`, `run`, `setup`
-- `flake.nix` — nix package for use by dotfiles/home-manager consumers
+### nssh (local, macOS)
 
-## Session transport selection
+- Wraps `ssh` or `mosh` with automatic transport selection
+- Subscribes to `ntfy.abizer.dev/reverse-open-<host>` in a background goroutine
+- Dispatches incoming messages by `kind`:
+  - `open`: opens URL locally, proxies OAuth callbacks via fresh `ssh -W`
+  - `clip-write`: writes to macOS clipboard (text via pbcopy, images via osascript)
+  - `clip-read-request`: reads macOS clipboard, publishes response back to ntfy
 
-| Invocation          | Behavior                                                                                               |
-|---------------------|--------------------------------------------------------------------------------------------------------|
-| `nssh host`         | Probe `ssh -o BatchMode=yes host 'command -v mosh-server'`; use mosh if both ends have it, else ssh   |
-| `nssh --ssh host`   | Force plain ssh (skip the probe)                                                                       |
-| `nssh --mosh host`  | Force mosh (skip the probe — trust the user)                                                           |
+### nssh-shim (remote, Linux)
 
-Mosh invocations set `LC_ALL=C.UTF-8` / `LANG=C.UTF-8` in the child env to
-side-step the common "en_US.UTF-8 isn't available" error on vanilla Linux
-remotes where that locale hasn't been generated (seen on exe.dev VMs,
-Nix-installed mosh without glibcLocales, etc.).
+- Single static binary, symlinked as `xdg-open`, `xclip`, `wl-copy`, `wl-paste`
+- Dispatches on `os.Args[0]` (persona), parses the relevant CLI flags
+- Publishes clipboard data / URL open requests to ntfy as JSON envelopes
+- For clipboard reads: publishes a request with correlation ID, subscribes to
+  the topic stream with a 5s timeout waiting for the matching response
 
-If mosh fails at runtime (UDP blocked by NAT, remote shell breaks bootstrap,
-etc.) nssh prints mosh's error and exits. Rerun with `--ssh` to fall back.
+### Wire format
 
-## OAuth callback proxy
+JSON envelopes on the ntfy topic. Every message has a `kind` field:
 
-When a URL contains `localhost:<port>` (top-level or in a query param), `nssh`:
+| Kind | Direction | Description |
+|------|-----------|-------------|
+| `open` | remote → local | Open a URL in the local browser |
+| `clip-write` | remote → local | Write data to the Mac clipboard |
+| `clip-read-request` | remote → local | Request the Mac clipboard contents |
+| `clip-read-response` | local → remote | Response with clipboard data |
 
-1. Listens on that port locally
-2. Accepts exactly one connection (the browser's OAuth callback GET)
-3. Proxies it to the remote via a fresh `ssh -W localhost:<port> <host>`
-4. Returns the response to the browser
-5. Closes listener and tunnel immediately — one-shot, nothing lingers
+Small text (≤3KB) is base64-encoded inline in the `body` field. Larger payloads
+and images are sent as ntfy attachments (PUT with `Filename` + `X-Message` headers).
 
-Each OAuth forward is an independent SSH connection — no ControlMaster, no
-socket files. This makes the forward behave identically whether the
-interactive session is mosh or ssh, and makes it roam-safe (a mid-session
-sleep/wake or network change doesn't break future OAuth forwards).
+### Topic convention
 
-## Topic convention
-
-`<NSSH_NTFY_BASE>/reverse-open-<short-hostname>` — base defaults to
-`https://ntfy.abizer.dev`, overridable via `NSSH_NTFY_BASE` env var.
+`<NSSH_NTFY_BASE>/reverse-open-<short-hostname>` — defaults to
+`https://ntfy.abizer.dev`, overridable via `NSSH_NTFY_BASE`.
 
 ## Key constraints
 
-- Only forward `http://` and `https://` URLs
-- Never eval or execute received content on local side
-- Graceful fallback to plain `ssh` when hostname can't be resolved
 - stdlib only — no external Go dependencies
+- nssh-shim must cross-compile as a static binary with zero runtime deps
+- Never eval or execute received content on local side
+- Only bridge CLIPBOARD selection, not PRIMARY

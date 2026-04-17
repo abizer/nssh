@@ -15,6 +15,9 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/abizer/ssh-reverse-ntfy/internal/ntfy"
+	"github.com/abizer/ssh-reverse-ntfy/internal/wire"
 )
 
 var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
@@ -26,7 +29,6 @@ func ntfyBase() string {
 	return "https://ntfy.abizer.dev"
 }
 
-// resolveShortHost runs ssh -G to get the canonical hostname, strips the domain.
 func resolveShortHost(sshArgs []string) string {
 	out, err := exec.Command("ssh", append([]string{"-G"}, sshArgs...)...).Output()
 	if err != nil {
@@ -44,16 +46,12 @@ func resolveShortHost(sshArgs []string) string {
 	return ""
 }
 
-// extractLocalhostPort finds a localhost:<port> anywhere in the URL —
-// including inside query parameters like redirect_uri.
 func extractLocalhostPort(rawURL string) string {
 	u, err := url.Parse(rawURL)
 	if err == nil {
-		// Top-level URL is localhost
 		if h := u.Hostname(); h == "localhost" || h == "127.0.0.1" {
 			return u.Port()
 		}
-		// Embedded in query params (e.g. redirect_uri=http%3A%2F%2Flocalhost%3A8080%2F...)
 		for _, vals := range u.Query() {
 			for _, v := range vals {
 				if m := localhostRe.FindStringSubmatch(v); len(m) > 1 {
@@ -62,19 +60,12 @@ func extractLocalhostPort(rawURL string) string {
 			}
 		}
 	}
-	// Raw regex fallback over the full URL string
 	if m := localhostRe.FindStringSubmatch(rawURL); len(m) > 1 {
 		return m[1]
 	}
 	return ""
 }
 
-// proxyOAuthCallback listens on port, accepts exactly one connection,
-// proxies it to the same port on the remote via a fresh ssh -W, then closes
-// everything. Each forward is an independent ssh connection — no shared
-// control master — so OAuth callbacks survive network roams (sleep/wake,
-// WiFi change) and work identically regardless of whether the interactive
-// session is mosh or ssh.
 func proxyOAuthCallback(port, sshTarget string) {
 	ln, err := net.Listen("tcp", "localhost:"+port)
 	if err != nil {
@@ -82,16 +73,13 @@ func proxyOAuthCallback(port, sshTarget string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "nssh: ready for OAuth callback on :%s\n", port)
-
 	conn, err := ln.Accept()
-	ln.Close() // one-shot: stop accepting immediately
+	ln.Close()
 	if err != nil {
 		return
 	}
 	defer conn.Close()
-
-	fwd := exec.Command("ssh", "-W",
-		fmt.Sprintf("localhost:%s", port), sshTarget)
+	fwd := exec.Command("ssh", "-W", fmt.Sprintf("localhost:%s", port), sshTarget)
 	fwd.Stdin = conn
 	fwd.Stdout = conn
 	fwd.Stderr = os.Stderr
@@ -102,41 +90,14 @@ func proxyOAuthCallback(port, sshTarget string) {
 	fmt.Fprintf(os.Stderr, "nssh: OAuth callback on :%s done\n", port)
 }
 
-// resetTerminal disables mouse tracking modes that a remote tmux/vim may have
-// left enabled when the SSH connection drops before it can send the "off" sequences.
 func resetTerminal() {
 	os.Stdout.WriteString(
-		"\x1b[?1000l" + // normal tracking off
-			"\x1b[?1002l" + // button-event tracking off
-			"\x1b[?1003l" + // any-event tracking off
-			"\x1b[?1006l" + // SGR extended mode off
-			"\x1b[?25h", // cursor visible
+		"\x1b[?1000l" + "\x1b[?1002l" + "\x1b[?1003l" + "\x1b[?1006l" + "\x1b[?25h",
 	)
 }
 
-// envelope is the JSON wire format for messages on the ntfy topic. Every
-// message is a JSON object with at least a "kind" field; fields other than
-// Kind are optional and interpreted per-kind by the dispatcher.
-type envelope struct {
-	Kind string `json:"kind"`
-	URL  string `json:"url,omitempty"`  // "open"
-	Mime string `json:"mime,omitempty"` // "clip-write", "clip-read-*"
-	Body string `json:"body,omitempty"` // base64-encoded inline payload
-	ID   string `json:"id,omitempty"`   // correlation ID for clip-read request/response
-}
-
-// parseEnvelope unmarshals a raw ntfy message body. Returns ok=false if the
-// body is not a valid JSON envelope with a non-empty Kind field.
-func parseEnvelope(body string) (envelope, bool) {
-	var env envelope
-	if err := json.Unmarshal([]byte(body), &env); err != nil || env.Kind == "" {
-		return envelope{}, false
-	}
-	return env, true
-}
-
-func handleMessage(msg ntfyMsg, topicURL, sshTarget string) {
-	env, ok := parseEnvelope(msg.Message)
+func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
+	env, ok := wire.Parse(msg.Message)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(msg.Message))
 		return
@@ -149,9 +110,7 @@ func handleMessage(msg ntfyMsg, topicURL, sshTarget string) {
 	case "clip-read-request":
 		handleClipReadRequest(env, topicURL)
 	case "clip-read-response":
-		// Handled by the remote shim, not by the local subscriber.
-		// If we see this here, it means a response is echoed back to us —
-		// safe to ignore.
+		// Responses are for the remote shim, not us. Ignore.
 	default:
 		fmt.Fprintf(os.Stderr, "nssh: unknown envelope kind %q\n", env.Kind)
 	}
@@ -169,16 +128,9 @@ func handleOpen(rawURL, sshTarget string) {
 	}
 }
 
-type ntfyMsg struct {
-	Event      string          `json:"event"`
-	Message    string          `json:"message"`
-	Attachment *ntfyAttachment `json:"attachment,omitempty"`
-}
-
-// subscribeNtfy streams the ntfy JSON endpoint and dispatches incoming messages.
-// Reconnects automatically on failure.
 func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
 	endpoint := ntfyBase() + "/" + topic + "/json"
+	topicURL := ntfyBase() + "/" + topic
 	client := &http.Client{}
 
 	for {
@@ -203,10 +155,9 @@ func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
 			continue
 		}
 
-		topicURL := ntfyBase() + "/" + topic
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
-			var msg ntfyMsg
+			var msg ntfy.Msg
 			if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
 				continue
 			}
@@ -224,23 +175,11 @@ func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
 	}
 }
 
-// remoteHasMosh checks whether mosh-server exists on the remote host.
-// Uses BatchMode so it's non-interactive: hosts that need a password
-// prompt simply won't auto-upgrade to mosh, which is fine — the default
-// session selection falls back to ssh. If the user wants mosh anyway,
-// they can pass --mosh to skip this preflight.
 func remoteHasMosh(sshTarget string) bool {
-	cmd := exec.Command("ssh",
-		"-o", "BatchMode=yes",
-		sshTarget,
-		"command -v mosh-server >/dev/null 2>&1",
-	)
+	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "command -v mosh-server >/dev/null 2>&1")
 	return cmd.Run() == nil
 }
 
-// runSession runs an already-configured interactive session command
-// (mosh or ssh) in the foreground, forwarding SIGINT/SIGTERM/SIGHUP to
-// the child and waiting for it to exit.
 func runSession(cmd *exec.Cmd, sigs <-chan os.Signal) error {
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Start(); err != nil {
@@ -266,8 +205,6 @@ func usage() {
 }
 
 func main() {
-	// Parse our own flags before the ssh target. Only --ssh and --mosh
-	// are recognized; anything else falls through to ssh's argument list.
 	args := os.Args[1:]
 	forceSSH := false
 	forceMosh := false
@@ -307,7 +244,6 @@ func main() {
 	}
 
 	ntfyTopic := "reverse-open-" + shortHost
-
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s/%s\n", ntfyBase(), ntfyTopic)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -317,15 +253,9 @@ func main() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	// Pick the session transport.
-	//   --ssh      → always ssh
-	//   --mosh     → always mosh (trust the user; skip preflight)
-	//   (default)  → mosh if local + remote both have it; otherwise ssh
-	// If mosh fails at runtime, the user re-runs with --ssh.
 	useMosh := false
 	switch {
 	case forceSSH:
-		// stay false
 	case forceMosh:
 		useMosh = true
 	default:
@@ -338,9 +268,6 @@ func main() {
 	if useMosh {
 		fmt.Fprintln(os.Stderr, "nssh: using mosh for interactive session")
 		session = exec.Command("mosh", sshTarget)
-		// Force a universally-available UTF-8 locale — side-steps the
-		// "en_US.UTF-8 isn't available" mosh-server error on vanilla
-		// Linux remotes (including Nix-installed mosh without glibcLocales).
 		session.Env = append(os.Environ(), "LC_ALL=C.UTF-8", "LANG=C.UTF-8")
 	} else {
 		session = exec.Command("ssh", sshArgs...)
@@ -352,4 +279,3 @@ func main() {
 		os.Exit(exitErr.ExitCode())
 	}
 }
-

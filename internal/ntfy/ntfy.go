@@ -1,4 +1,4 @@
-package main
+package ntfy
 
 import (
 	"bytes"
@@ -7,16 +7,23 @@ import (
 	"net/http"
 )
 
-// ntfyAttachment is the attachment metadata from ntfy's JSON stream.
-type ntfyAttachment struct {
+// Attachment is the attachment metadata from ntfy's JSON stream.
+type Attachment struct {
 	Name string `json:"name"`
 	URL  string `json:"url"`
 	Size int64  `json:"size"`
 	Type string `json:"type"`
 }
 
-// publishMessage POSTs a text message to the given ntfy topic URL.
-func publishMessage(topicURL, body string) error {
+// Msg is a single message from the ntfy JSON stream.
+type Msg struct {
+	Event      string      `json:"event"`
+	Message    string      `json:"message"`
+	Attachment *Attachment `json:"attachment,omitempty"`
+}
+
+// PublishMessage POSTs a text message to the given ntfy topic URL.
+func PublishMessage(topicURL, body string) error {
 	resp, err := http.Post(topicURL, "application/json", bytes.NewBufferString(body))
 	if err != nil {
 		return fmt.Errorf("ntfy publish: %w", err)
@@ -29,10 +36,10 @@ func publishMessage(topicURL, body string) error {
 	return nil
 }
 
-// publishAttachment PUTs binary data as an attachment to the topic URL.
+// PublishAttachment PUTs binary data as an attachment to the topic URL.
 // The message string is sent in the X-Message header so the subscriber
 // receives it alongside the attachment metadata.
-func publishAttachment(topicURL, message string, data []byte, filename string) error {
+func PublishAttachment(topicURL, message string, data []byte, filename string) error {
 	req, err := http.NewRequest("PUT", topicURL, bytes.NewReader(data))
 	if err != nil {
 		return fmt.Errorf("ntfy attach: %w", err)
@@ -51,8 +58,8 @@ func publishAttachment(topicURL, message string, data []byte, filename string) e
 	return nil
 }
 
-// fetchAttachment downloads binary data from an ntfy attachment URL.
-func fetchAttachment(attachURL string) ([]byte, error) {
+// FetchAttachment downloads binary data from an ntfy attachment URL.
+func FetchAttachment(attachURL string) ([]byte, error) {
 	resp, err := http.Get(attachURL)
 	if err != nil {
 		return nil, fmt.Errorf("ntfy fetch: %w", err)

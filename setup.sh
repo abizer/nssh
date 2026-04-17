@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Install the nssh-shim + ntfy config on a remote host.
+# Install the nssh-shim binary + ntfy config on a remote host.
 # Usage: ./setup.sh <host> [extra ssh args...]
+# Expects nssh-shim (linux/amd64) to be already built in the repo root
+# (the justfile's `setup` target handles this automatically).
 set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
@@ -9,6 +11,13 @@ if [[ $# -eq 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHIM="${SCRIPT_DIR}/nssh-shim"
+
+if [[ ! -f "$SHIM" ]]; then
+  echo "nssh: nssh-shim binary not found — run 'just build-shim' first" >&2
+  exit 1
+fi
+
 ntfy_base="${NSSH_NTFY_BASE:-https://ntfy.abizer.dev}"
 short_host="$(ssh -G "$@" 2>/dev/null | awk '/^hostname /{print $2}' | cut -d. -f1)"
 
@@ -20,16 +29,15 @@ fi
 ntfy_url="${ntfy_base}/reverse-open-${short_host}"
 echo "nssh: installing shim on $1 (topic: ${ntfy_url})"
 
-# Copy the shim script to the remote.
-scp -q "${SCRIPT_DIR}/shim.sh" "$1:~/.local/bin/nssh-shim"
+# Copy the cross-compiled binary to the remote.
+scp -q "$SHIM" "$1:~/.local/bin/nssh-shim"
 
-# Configure and symlink on the remote.
+# Set up symlinks and config on the remote.
 ssh "$@" bash -s -- "$ntfy_url" << 'REMOTE'
 set -euo pipefail
 ntfy_url="$1"
 
 mkdir -p ~/.local/bin
-
 chmod +x ~/.local/bin/nssh-shim
 
 # Symlink all personas.

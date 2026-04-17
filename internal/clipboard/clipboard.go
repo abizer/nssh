@@ -1,4 +1,4 @@
-package main
+package clipboard
 
 import (
 	"bytes"
@@ -7,8 +7,8 @@ import (
 	"os/exec"
 )
 
-// readText returns the current macOS clipboard text via pbpaste.
-func readText() ([]byte, error) {
+// ReadText returns the current macOS clipboard text via pbpaste.
+func ReadText() ([]byte, error) {
 	out, err := exec.Command("pbpaste").Output()
 	if err != nil {
 		return nil, fmt.Errorf("pbpaste: %w", err)
@@ -16,8 +16,8 @@ func readText() ([]byte, error) {
 	return out, nil
 }
 
-// writeText replaces the macOS clipboard text via pbcopy.
-func writeText(data []byte) error {
+// WriteText replaces the macOS clipboard text via pbcopy.
+func WriteText(data []byte) error {
 	cmd := exec.Command("pbcopy")
 	cmd.Stdin = bytes.NewReader(data)
 	if err := cmd.Run(); err != nil {
@@ -26,11 +26,8 @@ func writeText(data []byte) error {
 	return nil
 }
 
-// readImagePNG returns PNG bytes from the macOS clipboard using pngpaste.
-// pngpaste is required — install via `brew install pngpaste`. We deliberately
-// skip the osascript «data PNGf» hex-unwrap fallback: it's fragile, and
-// requiring pngpaste keeps the code path simple.
-func readImagePNG() ([]byte, error) {
+// ReadImagePNG returns PNG bytes from the macOS clipboard using pngpaste.
+func ReadImagePNG() ([]byte, error) {
 	out, err := exec.Command("pngpaste", "-").Output()
 	if err != nil {
 		return nil, fmt.Errorf("pngpaste: %w (install via 'brew install pngpaste')", err)
@@ -38,9 +35,9 @@ func readImagePNG() ([]byte, error) {
 	return out, nil
 }
 
-// writeImagePNG replaces the macOS clipboard with PNG bytes by writing them
+// WriteImagePNG replaces the macOS clipboard with PNG bytes by writing them
 // to a temp file and running osascript.
-func writeImagePNG(data []byte) error {
+func WriteImagePNG(data []byte) error {
 	f, err := os.CreateTemp("", "nssh-clip-*.png")
 	if err != nil {
 		return err
