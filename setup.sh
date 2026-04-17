@@ -11,10 +11,14 @@ if [[ $# -eq 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SHIM="${SCRIPT_DIR}/nssh-shim"
-
+# Prefer the cross-compiled binary (nssh-shim-amd64 from `just build-linux`),
+# fall back to nssh-shim (from `just build`).
+SHIM="${SCRIPT_DIR}/nssh-shim-amd64"
 if [[ ! -f "$SHIM" ]]; then
-  echo "nssh: nssh-shim binary not found — run 'just build-shim' first" >&2
+  SHIM="${SCRIPT_DIR}/nssh-shim"
+fi
+if [[ ! -f "$SHIM" ]]; then
+  echo "nssh: nssh-shim binary not found — run 'just build-linux' first" >&2
   exit 1
 fi
 
