@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -19,32 +18,13 @@ import (
 	"github.com/abizer/nssh/internal/wire"
 )
 
-func readConfig() string {
-	dir := os.Getenv("XDG_CONFIG_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".config")
-	}
-	path := filepath.Join(dir, "nssh", "config.toml")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nssh: cannot read %s: %v\n", path, err)
+func shimTopicURL() string {
+	cfg := loadConfig()
+	if cfg.Topic == "" {
+		fmt.Fprintln(os.Stderr, "nssh: no topic configured (not inside an nssh session?)")
 		os.Exit(1)
 	}
-	for _, line := range strings.Split(string(data), "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "url") {
-			if idx := strings.Index(line, `"`); idx >= 0 {
-				end := strings.LastIndex(line, `"`)
-				if end > idx {
-					return line[idx+1 : end]
-				}
-			}
-		}
-	}
-	fmt.Fprintf(os.Stderr, "nssh: no url found in %s\n", path)
-	os.Exit(1)
-	return ""
+	return cfg.topicURL()
 }
 
 func shimClipWrite(topicURL, mime string) {
@@ -155,7 +135,7 @@ func doXdgOpen(args []string) {
 		cmd.Run()
 		os.Exit(cmd.ProcessState.ExitCode())
 	}
-	topicURL := readConfig()
+	topicURL := shimTopicURL()
 	env := wire.Envelope{Kind: "open", URL: args[0]}
 	body, _ := json.Marshal(env)
 	if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
@@ -208,7 +188,7 @@ func doXclip(args []string) {
 		return
 	}
 
-	topicURL := readConfig()
+	topicURL := shimTopicURL()
 	switch direction {
 	case "in":
 		shimClipWrite(topicURL, mime)
@@ -225,7 +205,7 @@ func doWlCopy(args []string) {
 			i++
 		}
 	}
-	topicURL := readConfig()
+	topicURL := shimTopicURL()
 	shimClipWrite(topicURL, mime)
 }
 
@@ -237,7 +217,7 @@ func doWlPaste(args []string) {
 			i++
 		}
 	}
-	topicURL := readConfig()
+	topicURL := shimTopicURL()
 	shimClipRead(topicURL, mime)
 }
 

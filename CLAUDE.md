@@ -9,12 +9,12 @@ bridge and URL forwarder over ntfy pub/sub.
 ## Repo layout
 
 ```
-cmd/nssh/              The single binary (session wrapper + shim, dispatched on argv[0])
+cmd/nssh/              The single binary (session wrapper + shim + --infect, dispatched on argv[0])
 internal/wire/         Shared envelope type and parser
 internal/ntfy/         Shared ntfy HTTP helpers (publish, attach, fetch)
 internal/clipboard/    macOS pasteboard helpers (pbcopy, pbpaste, pngpaste, osascript)
 docs/                  Design docs
-setup.sh               Cross-compiles + installs nssh + symlinks on a remote host
+.github/workflows/     CI (cachix.yaml for nix, release.yml for tagged releases)
 justfile               Build recipes
 flake.nix              Nix package
 ```
@@ -23,11 +23,19 @@ flake.nix              Nix package
 
 ```bash
 just build          # builds nssh for local platform
-just build-linux    # cross-compiles nssh for linux/amd64
 just install        # copies nssh to ~/.local/bin/ and ad-hoc signs it
-just setup <host>   # cross-compiles + scp + symlinks on remote
 just test           # runs all tests
 ```
+
+## Remote setup
+
+```bash
+nssh --infect <host>
+```
+
+Downloads the matching binary from the latest GitHub release, scps it to
+the remote, and sets up the shim symlinks. No build tooling or config
+required on the remote.
 
 ## Architecture
 
@@ -43,7 +51,8 @@ just test           # runs all tests
 ### Session mode (local)
 
 - Wraps `ssh` or `mosh` with automatic transport selection
-- Subscribes to `ntfy.abizer.dev/reverse-open-<host>` in a background goroutine
+- Generates a random topic (or reads a pinned one from config), writes it to
+  the remote's `~/.config/nssh/session`, subscribes to ntfy in a background goroutine
 - Dispatches incoming messages by `kind`:
   - `open`: opens URL locally, proxies OAuth callbacks via fresh `ssh -W`
   - `clip-write`: writes to macOS clipboard (text via pbcopy, images via osascript)
@@ -75,12 +84,21 @@ and images are sent as ntfy attachments (PUT with `Filename` + `X-Message` heade
 
 ### Topic convention
 
-`<NSSH_NTFY_BASE>/reverse-open-<short-hostname>` — defaults to
-`https://ntfy.abizer.dev`, overridable via `NSSH_NTFY_BASE`.
+Each connection gets a random topic (`nssh_<random>`) by default — unguessable,
+no config required. nssh writes the server + topic to `~/.config/nssh/session`
+on the remote before launching the shell. The shim reads this file.
+
+Optional `~/.config/nssh/config.toml` on either side to pin values:
+```toml
+server = "https://ntfy.example.com"  # default: https://ntfy.sh
+topic = "my-fixed-topic"             # default: random per-connection
+```
+
+Priority: `NSSH_NTFY_BASE` env > config.toml > session file > defaults.
 
 ## Key constraints
 
 - stdlib only — no external Go dependencies
-- nssh-shim must cross-compile as a static binary with zero runtime deps
+- Single binary cross-compiles for macOS and Linux with zero runtime deps
 - Never eval or execute received content on local side
 - Only bridge CLIPBOARD selection, not PRIMARY

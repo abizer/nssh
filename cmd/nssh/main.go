@@ -23,11 +23,19 @@ import (
 
 var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
 
-func ntfyBase() string {
-	if v := os.Getenv("NSSH_NTFY_BASE"); v != "" {
-		return v
+// writeRemoteSession writes the session file to the remote host so the shim
+// knows which ntfy server/topic to use. Runs a quick SSH command before the
+// interactive session starts.
+func writeRemoteSession(sshTarget string, cfg nsshConfig) {
+	script := fmt.Sprintf(
+		`mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nssh" && printf 'server = "%s"\ntopic = "%s"\n' > "${XDG_CONFIG_HOME:-$HOME/.config}/nssh/session"`,
+		cfg.Server, cfg.Topic,
+	)
+	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, script)
+	if err := cmd.Run(); err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: failed to write session config on remote: %v\n", err)
+		// Non-fatal — shim may still work if remote has a pinned config.toml.
 	}
-	return "https://ntfy.abizer.dev"
 }
 
 func resolveShortHost(sshArgs []string) string {
@@ -129,9 +137,9 @@ func handleOpen(rawURL, sshTarget string) {
 	}
 }
 
-func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
-	endpoint := ntfyBase() + "/" + topic + "/json"
-	topicURL := ntfyBase() + "/" + topic
+func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
+	topicURL := cfg.topicURL()
+	endpoint := topicURL + "/json"
 	client := &http.Client{}
 
 	for {
@@ -199,9 +207,10 @@ func runSession(cmd *exec.Cmd, sigs <-chan os.Signal) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh] <host> [ssh args...]")
-	fmt.Fprintln(os.Stderr, "  --ssh   force plain ssh (skip mosh auto-detect)")
-	fmt.Fprintln(os.Stderr, "  --mosh  force mosh (skip remote preflight)")
+	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh|--infect] <host> [ssh args...]")
+	fmt.Fprintln(os.Stderr, "  --ssh     force plain ssh (skip mosh auto-detect)")
+	fmt.Fprintln(os.Stderr, "  --mosh    force mosh (skip remote preflight)")
+	fmt.Fprintln(os.Stderr, "  --infect  install nssh on the remote and set up symlinks")
 	os.Exit(1)
 }
 
@@ -220,6 +229,7 @@ func nsshMain() {
 	args := os.Args[1:]
 	forceSSH := false
 	forceMosh := false
+	doInfect := false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--ssh":
@@ -228,6 +238,10 @@ func nsshMain() {
 			continue
 		case "--mosh":
 			forceMosh = true
+			args = args[1:]
+			continue
+		case "--infect":
+			doInfect = true
 			args = args[1:]
 			continue
 		case "-h", "--help":
@@ -243,6 +257,11 @@ func nsshMain() {
 		usage()
 	}
 
+	if doInfect {
+		infect(args[0])
+		return
+	}
+
 	sshArgs := args
 	sshTarget := args[0]
 
@@ -255,12 +274,17 @@ func nsshMain() {
 		return
 	}
 
-	ntfyTopic := "reverse-open-" + shortHost
-	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s/%s\n", ntfyBase(), ntfyTopic)
+	cfg := loadConfig()
+	if cfg.Topic == "" {
+		cfg.Topic = generateTopic()
+	}
+	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
+
+	writeRemoteSession(sshTarget, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	go subscribeNtfy(ctx, ntfyTopic, sshTarget)
+	go subscribeNtfy(ctx, cfg, sshTarget)
 
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)

@@ -41,19 +41,23 @@ The same channel carries `xdg-open` URLs in the other direction. When `gh auth l
 
 **Local (macOS):**
 ```bash
-just build     # builds ./nssh
-just install   # copies to ~/.local/bin/nssh and ad-hoc signs it
-brew install pngpaste  # for clipboard image support
+brew install abizer/tap/nssh
+brew install pngpaste          # for clipboard image support
+```
+
+Or build from source:
+```bash
+just install                   # builds ./nssh and drops it in ~/.local/bin/
 ```
 
 **Remote (one-time per host):**
 ```bash
-just setup devbox
+nssh --infect devbox
 ```
 
-Cross-compiles nssh for linux/amd64, copies the binary to the remote, and symlinks it as `xdg-open`, `xclip`, `wl-copy`, `wl-paste`. Ensure `~/.local/bin` is in PATH on the remote (before `/usr/bin`). No runtime dependencies on the remote — nssh is a static Go binary.
+`--infect` detects the remote's OS/arch via `uname`, downloads the matching binary from the latest GitHub release (caches it locally), scps it to `~/.local/bin/nssh`, and creates the shim symlinks (`xdg-open`, `xclip`, `wl-copy`, `wl-paste`, `sensible-browser`). Ensure `~/.local/bin` is in PATH on the remote — nssh warns if not.
 
-For nix/home-manager managed hosts, add the flake input and symlinks are set up declaratively — no `just setup` needed.
+For nix/home-manager managed hosts, add the flake input and symlinks are set up declaratively.
 
 ## Usage
 
@@ -107,7 +111,7 @@ internal/clipboard/    macOS pasteboard (pbcopy, pbpaste, pngpaste, osascript)
 
 ### Wire format
 
-JSON envelopes on a per-host ntfy topic (`reverse-open-<hostname>`):
+JSON envelopes on a per-connection ntfy topic:
 
 | Kind | Direction | Purpose |
 |------|-----------|---------|
@@ -120,15 +124,22 @@ Small text (≤3KB) is base64-inlined. Larger payloads and images use ntfy attac
 
 ## Configuration
 
-| Env var | Default | Purpose |
-|---------|---------|---------|
-| `NSSH_NTFY_BASE` | `https://ntfy.abizer.dev` | ntfy server base URL |
+**Zero config required.** By default, nssh uses the public [ntfy.sh](https://ntfy.sh) server and generates a random, unguessable topic (`nssh_<random>`) for each connection. The topic is written to `~/.config/nssh/session` on the remote at connect time.
+
+To pin settings, create `~/.config/nssh/config.toml` (on either side):
+
+```toml
+server = "https://ntfy.example.com"  # default: https://ntfy.sh
+topic = "my-fixed-topic"             # default: random per-connection
+```
+
+The `NSSH_NTFY_BASE` environment variable overrides the server.
 
 ## Requirements
 
 - **Local:** macOS, Go 1.25+, [`pngpaste`](https://github.com/jcsalterego/pngpaste) (`brew install pngpaste`)
 - **Remote:** Linux with `~/.local/bin` in PATH. Zero runtime deps.
-- **Infra:** A self-hosted [ntfy](https://docs.ntfy.sh/install/) instance.
+- **Optional:** Self-hosted [ntfy](https://docs.ntfy.sh/install/) for privacy (public ntfy.sh works out of the box).
 - **Optional:** `mosh` on both ends for session roaming.
 
 ## License
