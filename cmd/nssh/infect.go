@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -37,18 +38,16 @@ func latestReleaseTag() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// Cheap JSON extraction — avoids pulling in encoding/json for one field.
-	const key = `"tag_name":"`
-	i := strings.Index(string(body), key)
-	if i < 0 {
+	var release struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.Unmarshal(body, &release); err != nil {
+		return "", fmt.Errorf("github api: %w", err)
+	}
+	if release.TagName == "" {
 		return "", fmt.Errorf("no tag_name in github response")
 	}
-	rest := string(body[i+len(key):])
-	j := strings.Index(rest, `"`)
-	if j < 0 {
-		return "", fmt.Errorf("malformed tag_name")
-	}
-	return rest[:j], nil
+	return release.TagName, nil
 }
 
 // resolveRemoteArch runs `uname -sm` on the remote and maps to Go's GOOS/GOARCH.
@@ -182,20 +181,22 @@ done
 	out, _ := exec.Command("ssh", sshTarget, `echo "$PATH"`).Output()
 	path := strings.TrimSpace(string(out))
 	pathDirs := strings.Split(path, ":")
-	userBin := ""
+	userBin := -1
 	systemBin := -1
 	for i, d := range pathDirs {
-		if strings.HasSuffix(d, "/.local/bin") && userBin == "" {
-			userBin = d
-			continue
+		if strings.HasSuffix(d, "/.local/bin") && userBin == -1 {
+			userBin = i
 		}
 		if (d == "/usr/bin" || d == "/bin") && systemBin == -1 {
 			systemBin = i
 		}
 	}
-	if userBin == "" {
+	if userBin == -1 {
 		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin is not in PATH on the remote")
 		fmt.Fprintln(os.Stderr, "  add to ~/.bashrc: export PATH=\"$HOME/.local/bin:$PATH\"")
+	} else if systemBin != -1 && userBin > systemBin {
+		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin appears after system bin in PATH on the remote")
+		fmt.Fprintln(os.Stderr, "  shims may not take precedence; add to ~/.bashrc: export PATH=\"$HOME/.local/bin:$PATH\"")
 	}
 
 	fmt.Fprintln(os.Stderr, "nssh: infection complete")

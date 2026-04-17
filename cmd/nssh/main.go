@@ -25,13 +25,15 @@ var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
 
 // writeRemoteSession writes the session file to the remote host so the shim
 // knows which ntfy server/topic to use. Runs a quick SSH command before the
-// interactive session starts.
-func writeRemoteSession(sshTarget string, cfg nsshConfig) {
-	script := fmt.Sprintf(
-		`mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nssh" && printf 'server = "%s"\ntopic = "%s"\n' > "${XDG_CONFIG_HOME:-$HOME/.config}/nssh/session"`,
-		cfg.Server, cfg.Topic,
-	)
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, script)
+// interactive session starts. Session file content is piped via stdin to avoid
+// shell injection from cfg.Server or cfg.Topic values.
+func writeRemoteSession(sshArgs []string, cfg nsshConfig) {
+	content := fmt.Sprintf("server = %q\ntopic = %q\n", cfg.Server, cfg.Topic)
+	script := `mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nssh" && cat > "${XDG_CONFIG_HOME:-$HOME/.config}/nssh/session"`
+	args := append([]string{"-o", "BatchMode=yes"}, sshArgs...)
+	args = append(args, script)
+	cmd := exec.Command("ssh", args...)
+	cmd.Stdin = strings.NewReader(content)
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: failed to write session config on remote: %v\n", err)
 		// Non-fatal — shim may still work if remote has a pinned config.toml.
@@ -280,7 +282,7 @@ func nsshMain() {
 	}
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
 
-	writeRemoteSession(sshTarget, cfg)
+	writeRemoteSession(sshArgs, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
