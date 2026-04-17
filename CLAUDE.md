@@ -22,9 +22,10 @@ flake.nix              Nix packages for nssh and nssh-shim
 ## Building
 
 ```bash
-just build          # builds cmd/nssh for local platform
-just build-shim     # cross-compiles cmd/nssh-shim for linux/amd64
-just setup <host>   # builds shim + scp + symlinks on remote
+just build          # builds nssh + nssh-shim for local platform
+just build-linux    # cross-compiles nssh-shim for linux/amd64
+just install        # copies nssh to ~/.local/bin/ and ad-hoc signs it
+just setup <host>   # cross-compiles shim + scp + symlinks on remote
 just test           # runs all tests
 ```
 
@@ -46,6 +47,9 @@ just test           # runs all tests
 - Publishes clipboard data / URL open requests to ntfy as JSON envelopes
 - For clipboard reads: publishes a request with correlation ID, subscribes to
   the topic stream with a 5s timeout waiting for the matching response
+- Handles `xclip -t TARGETS -o` by returning a static list of supported types
+  (image/png, text/plain, etc.) — Claude Code probes this before attempting
+  image paste via Ctrl+V
 
 ### Wire format
 
