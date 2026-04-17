@@ -119,7 +119,10 @@ func resetTerminal() {
 // Kind are optional and interpreted per-kind by the dispatcher.
 type envelope struct {
 	Kind string `json:"kind"`
-	URL  string `json:"url,omitempty"`
+	URL  string `json:"url,omitempty"`  // "open"
+	Mime string `json:"mime,omitempty"` // "clip-write", "clip-read-*"
+	Body string `json:"body,omitempty"` // base64-encoded inline payload
+	ID   string `json:"id,omitempty"`   // correlation ID for clip-read request/response
 }
 
 // parseEnvelope unmarshals a raw ntfy message body. Returns ok=false if the
@@ -132,15 +135,23 @@ func parseEnvelope(body string) (envelope, bool) {
 	return env, true
 }
 
-func handleMessage(body, sshTarget string) {
-	env, ok := parseEnvelope(body)
+func handleMessage(msg ntfyMsg, topicURL, sshTarget string) {
+	env, ok := parseEnvelope(msg.Message)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(body))
+		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(msg.Message))
 		return
 	}
 	switch env.Kind {
 	case "open":
 		handleOpen(env.URL, sshTarget)
+	case "clip-write":
+		handleClipWrite(env, msg.Attachment)
+	case "clip-read-request":
+		handleClipReadRequest(env, topicURL)
+	case "clip-read-response":
+		// Handled by the remote shim, not by the local subscriber.
+		// If we see this here, it means a response is echoed back to us —
+		// safe to ignore.
 	default:
 		fmt.Fprintf(os.Stderr, "nssh: unknown envelope kind %q\n", env.Kind)
 	}
@@ -192,6 +203,7 @@ func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
 			continue
 		}
 
+		topicURL := ntfyBase() + "/" + topic
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			var msg ntfyMsg
@@ -199,7 +211,7 @@ func subscribeNtfy(ctx context.Context, topic, sshTarget string) {
 				continue
 			}
 			if msg.Event == "message" && msg.Message != "" {
-				go handleMessage(msg.Message, sshTarget)
+				go handleMessage(msg, topicURL, sshTarget)
 			}
 		}
 		resp.Body.Close()
