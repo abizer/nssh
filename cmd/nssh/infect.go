@@ -13,14 +13,36 @@ import (
 
 // version returns the module version embedded in the binary. For builds from
 // go install or go build with a tagged module, this is "v1.2.3"; for untagged
-// builds (local dev) it returns "(devel)" and we fall back to the latest
-// release on GitHub.
+// builds (local dev) it returns "(devel)" or a version with "+dirty" suffix
+// and we fall back to the latest release on GitHub.
 func version() string {
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
 		return ""
 	}
 	return info.Main.Version
+}
+
+// looksLikeSemver reports whether v is a clean "vX.Y.Z" tag (no +dirty etc).
+func looksLikeSemver(v string) bool {
+	if !strings.HasPrefix(v, "v") || strings.ContainsAny(v, "+ ") {
+		return false
+	}
+	parts := strings.Split(v[1:], ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, p := range parts {
+		if p == "" {
+			return false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // latestReleaseTag queries the GitHub API for the most recent nssh release.
@@ -129,9 +151,11 @@ func infect(sshTarget string) {
 	}
 	fmt.Fprintf(os.Stderr, "nssh: remote is %s/%s\n", goos, goarch)
 
-	// 2. Resolve release tag.
+	// 2. Resolve release tag. Only use an embedded version if it looks like
+	// a clean semver (vX.Y.Z) — anything with "+dirty", "(devel)", etc.
+	// indicates a local/unreleased build, so fall back to the latest release.
 	tag := version()
-	if tag == "" || tag == "(devel)" {
+	if !looksLikeSemver(tag) {
 		t, err := latestReleaseTag()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: couldn't resolve release tag: %v\n", err)
@@ -181,7 +205,7 @@ done
 	// 6. Sanity-check that our xclip shim resolves first in an interactive
 	// login shell. A non-interactive `ssh host 'echo $PATH'` doesn't source
 	// bashrc/profile, so it would lie — hence -l (login shell) here.
-	out, _ := exec.Command("ssh", sshTarget, "bash", "-l", "-c", "command -v xclip").Output()
+	out, _ := exec.Command("ssh", sshTarget, `bash -l -c 'command -v xclip'`).Output()
 	resolved := strings.TrimSpace(string(out))
 	if !strings.Contains(resolved, ".local/bin/xclip") {
 		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin/xclip is not first in PATH on the remote")
