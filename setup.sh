@@ -1,10 +1,19 @@
 #!/usr/bin/env bash
-# Install the xdg-open shim + ntfy config on a remote host.
+# Install nssh + clipboard/xdg-open symlinks on a remote host.
 # Usage: ./setup.sh <host> [extra ssh args...]
+# Expects nssh-linux to be already built (the justfile handles this).
 set -euo pipefail
 
 if [[ $# -eq 0 ]]; then
   echo "usage: setup.sh <host> [ssh args...]" >&2
+  exit 1
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+BINARY="${SCRIPT_DIR}/nssh-linux"
+
+if [[ ! -f "$BINARY" ]]; then
+  echo "nssh: nssh-linux binary not found — run 'just build-linux' first" >&2
   exit 1
 fi
 
@@ -17,40 +26,34 @@ if [[ -z "$short_host" ]]; then
 fi
 
 ntfy_url="${ntfy_base}/reverse-open-${short_host}"
-echo "nssh: installing shim on $1 (topic: ${ntfy_url})"
+echo "nssh: installing on $1 (topic: ${ntfy_url})"
 
+# Copy the cross-compiled binary to the remote.
+scp -q "$BINARY" "$1:~/.local/bin/nssh"
+
+# Set up symlinks and config on the remote.
 ssh "$@" bash -s -- "$ntfy_url" << 'REMOTE'
 set -euo pipefail
 ntfy_url="$1"
 
 mkdir -p ~/.local/bin
+chmod +x ~/.local/bin/nssh
 
-cat > ~/.local/bin/xdg-open << 'SHIM'
-#!/bin/bash
-set -euo pipefail
-url="${1:-}"
-ntfy="$(sed -n 's/^url *= *"\(.*\)"/\1/p' "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy/config.toml" 2>/dev/null)"
-if [[ -z "$ntfy" ]] || [[ ! "$url" =~ ^https?:// ]]; then
-  exec /usr/bin/xdg-open "$@"
-fi
-if curl -sf -m 5 -d "$url" "$ntfy" >/dev/null 2>&1; then
-  exit 0
-else
-  exec /usr/bin/xdg-open "$@"
-fi
-SHIM
+# Symlink shim personas.
+for name in xdg-open sensible-browser xclip wl-copy wl-paste; do
+  ln -sf ~/.local/bin/nssh ~/.local/bin/"$name"
+done
 
-chmod +x ~/.local/bin/xdg-open
-ln -sf ~/.local/bin/xdg-open ~/.local/bin/sensible-browser 2>/dev/null || true
-
+# Write the ntfy config.
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy"
 cat > "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy/config.toml" << EOF
 url = "$ntfy_url"
 EOF
 
-echo "Installed xdg-open shim to ~/.local/bin/"
-echo "Configured ntfy endpoint: $ntfy_url"
-echo "Ensure ~/.local/bin is in your PATH (before /usr/bin)"
+echo "Installed nssh to ~/.local/bin/"
+echo "  Symlinks: xdg-open, sensible-browser, xclip, wl-copy, wl-paste"
+echo "  Configured ntfy endpoint: $ntfy_url"
+echo "  Ensure ~/.local/bin is in your PATH (before /usr/bin)"
 REMOTE
 
 echo "nssh: setup complete for $1"

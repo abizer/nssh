@@ -1,35 +1,32 @@
 # ssh-reverse-ntfy
 
-Forward `xdg-open` calls from remote SSH sessions to your local browser, using [ntfy](https://ntfy.sh) as a message bus. OAuth flows (like `gh auth login`, `gcloud auth login`) complete automatically — including the localhost callback. Transparently uses `mosh` when both sides have it, for roaming across sleep/network changes; falls back to plain `ssh` otherwise.
+Forward clipboard, `xdg-open` calls, and OAuth callbacks between remote SSH/mosh sessions and your local Mac, using [ntfy](https://ntfy.sh) as a message bus. Clipboard bridging works for text of any size and images (PNG), enabling tools like Claude Code to paste screenshots over SSH. Transparently uses `mosh` when both sides have it, for roaming across sleep/network changes; falls back to plain `ssh` otherwise.
 
 ```
 Remote Host                        ntfy                          Local Mac
 ┌──────────────┐                ┌───────────┐                ┌──────────────┐
 │ xdg-open URL ├───POST /topic──▶           ├───subscribe────▶  open $URL   │
+│ xclip -i     ├───POST /topic──▶           ├───subscribe────▶  pbcopy      │
+│ xclip -o     ├───POST /topic──▶           ├───subscribe────▶  pbpaste ────┐
+│              ◀──────────────────────────────────────────────── response  ◀─┘
 └──────────────┘                └───────────┘                └──────────────┘
-
-OAuth callback:
-Browser → localhost:8085 (Mac) → ssh -W localhost:8085 devbox → remote server
-                                                                      ↓ response
-Browser ←─────────────────────────────────────────────────────────────┘
-                             [listener and tunnel close]
 ```
 
 ## Why?
 
-CLI tools on remote dev servers (`gh`, `gcloud`, `npm login`) try to open a browser. This fails silently over SSH. This tool forwards those URLs to your local machine — and for OAuth flows with a `localhost` callback, it automatically proxies the callback back to the remote server so the auth completes without manual port forwarding.
+**URLs:** CLI tools on remote dev servers (`gh`, `gcloud`, `npm login`) try to open a browser. This fails silently over SSH. nssh forwards those URLs to your local machine — and for OAuth flows with a `localhost` callback, it automatically proxies the callback back.
+
+**Clipboard:** Mosh limits OSC 52 clipboard to ~256 bytes and doesn't support images at all. SSH port forwarding doesn't survive network changes. nssh bridges the full clipboard (text and images, any size) through ntfy, which survives mosh, NAT, and network roaming. Remote tools that use `xclip` or `wl-copy`/`wl-paste` — including Claude Code's Ctrl+V image paste — work transparently.
 
 ## Install
 
-**Local:**
+**Local (macOS):**
 ```bash
-just build   # builds ./nssh
-just run     # builds and installs to ~/.local/bin/nssh
-```
+just build     # builds ./nssh
+just install   # copies to ~/.local/bin/nssh and ad-hoc signs it
 
-Add to your shell config (for `nssh-setup`):
-```bash
-source /path/to/ssh-reverse-ntfy/shell.zsh
+# Optional: for clipboard image support
+brew install pngpaste
 ```
 
 **Remote (one-time per host):**
@@ -37,37 +34,55 @@ source /path/to/ssh-reverse-ntfy/shell.zsh
 just setup devbox
 ```
 
-This SSHs into the host, installs the `xdg-open` shim to `~/.local/bin/`, and writes the ntfy config. Ensure `~/.local/bin` is in `PATH` on the remote (before `/usr/bin`).
-
-For NixOS/home-manager hosts, the shim and config are managed automatically — no manual setup needed.
+This cross-compiles `nssh` for linux/amd64, copies it to the remote host, and symlinks it as `xdg-open`, `xclip`, `wl-copy`, `wl-paste`. Ensure `~/.local/bin` is in PATH on the remote (before `/usr/bin`).
 
 ## Usage
 
 ```bash
-nssh devbox                      # auto-select: mosh if available on both ends, else ssh
-nssh --ssh devbox                # force plain ssh (e.g. when mosh's UDP path is blocked)
-nssh --mosh devbox               # force mosh, skip the remote probe
-xdg-open https://example.com     # (inside the session) opens in your local browser
+nssh devbox                      # auto-select: mosh if available, else ssh
+nssh --ssh devbox                # force plain ssh
+nssh --mosh devbox               # force mosh, skip remote probe
+
+# Inside the remote session:
+xdg-open https://example.com     # opens in your local browser
 gh auth login --web              # OAuth flow completes locally, including callback
+echo hello | xclip -sel clip -i  # copies "hello" to your Mac clipboard
+xclip -sel clip -o               # prints your Mac clipboard contents
+xclip -sel clip -t image/png -o > shot.png  # pulls a Mac screenshot to a file
 ```
 
-## How It Works
+Claude Code image paste (Ctrl+V) works automatically — CC calls `xclip` under the hood, which our shim intercepts.
 
-1. `nssh` resolves the SSH target hostname and derives the ntfy topic: `reverse-open-<hostname>`
-2. Subscribes to the ntfy topic's JSON stream in a background goroutine
-3. Picks a session transport:
-   - `--ssh` → plain ssh
-   - `--mosh` → mosh, skipping the probe
-   - default → probes the remote (`ssh host 'command -v mosh-server'`); uses mosh if both sides have it, otherwise ssh
-4. Runs the interactive session in the foreground, forwarding signals
-5. On URL received from ntfy:
-   - If it contains `localhost:<port>` anywhere (including inside `redirect_uri` query params), starts a one-shot local listener on that port
-   - Opens the URL in your local browser
-   - When the OAuth provider redirects the browser to `localhost:<port>`, proxies that single request to the remote via a fresh `ssh -W` — one-shot, no shared state
-   - Closes listener and tunnel immediately after the response
-6. On exit: ntfy subscription cancelled, terminal modes reset — no orphan processes
+## Architecture
 
-If mosh fails at runtime (e.g. UDP blocked by NAT on the remote's network, or remote shell breaks bootstrap), the error surfaces directly and you rerun with `--ssh` to fall back. nssh forces `LC_ALL=C.UTF-8` in mosh's environment to side-step the common "en_US.UTF-8 isn't available" failure on vanilla Linux remotes.
+One binary, everywhere. `nssh` dispatches on `argv[0]`:
+
+| argv[0] | Mode | Description |
+|---------|------|-------------|
+| `nssh` (or anything else) | session | SSH/mosh wrapper + ntfy subscriber |
+| `xclip` | shim | Clipboard bridge via ntfy |
+| `wl-copy` / `wl-paste` | shim | Wayland clipboard bridge |
+| `xdg-open` / `sensible-browser` | shim | URL forwarding |
+
+```
+cmd/nssh/              The single binary
+internal/wire/         Shared JSON envelope type
+internal/ntfy/         Shared ntfy HTTP helpers
+internal/clipboard/    macOS pasteboard helpers (pbcopy, pngpaste, osascript)
+```
+
+### Wire format
+
+JSON envelopes on a per-host ntfy topic (`reverse-open-<hostname>`):
+
+| Kind | Direction | Description |
+|------|-----------|-------------|
+| `open` | remote → local | Open a URL in the local browser |
+| `clip-write` | remote → local | Write data to the Mac clipboard |
+| `clip-read-request` | remote → local | Request Mac clipboard contents |
+| `clip-read-response` | local → remote | Response with clipboard data |
+
+Small text (≤3KB) is base64-inlined. Larger payloads and images go as ntfy attachments.
 
 ## Configuration
 
@@ -79,15 +94,17 @@ If mosh fails at runtime (e.g. UDP blocked by NAT on the remote's network, or re
 
 - **URL-only** — only `http://` and `https://` URLs are forwarded
 - **No eval** — received content is never executed
-- **One-shot proxy** — port listeners close after a single request
-- **Graceful fallback** — plain `ssh` if ntfy is unreachable or hostname can't be resolved
+- **CLIPBOARD only** — PRIMARY selection is not bridged
+- **One-shot OAuth proxy** — port listeners close after a single request
+- **Graceful fallback** — plain `ssh` if ntfy is unreachable
 
-Self-host ntfy for additional isolation: [docs.ntfy.sh/install](https://docs.ntfy.sh/install/).
+Self-host ntfy for isolation: [docs.ntfy.sh/install](https://docs.ntfy.sh/install/).
 
 ## Requirements
 
-- **Local:** macOS with `ssh`, Go (to build). `mosh` is optional — nssh auto-detects it.
-- **Remote:** Linux with `curl` and `~/.local/bin` in PATH. Optional: `mosh-server` for roaming sessions.
+- **Local:** macOS, Go (to build), `pngpaste` (for clipboard images — `brew install pngpaste`)
+- **Remote:** Linux with `~/.local/bin` in PATH. No runtime dependencies — nssh cross-compiles as a static Go binary.
+- **Optional:** `mosh` on both ends for session roaming
 
 ## License
 
