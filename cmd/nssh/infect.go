@@ -178,24 +178,17 @@ done
 		os.Exit(1)
 	}
 
-	// 6. Check PATH ordering and warn if needed.
-	out, _ := exec.Command("ssh", sshTarget, `echo "$PATH"`).Output()
-	path := strings.TrimSpace(string(out))
-	pathDirs := strings.Split(path, ":")
-	userBin := ""
-	systemBin := -1
-	for i, d := range pathDirs {
-		if strings.HasSuffix(d, "/.local/bin") && userBin == "" {
-			userBin = d
-			continue
+	// 6. Sanity-check that our xclip shim resolves first in an interactive
+	// login shell. A non-interactive `ssh host 'echo $PATH'` doesn't source
+	// bashrc/profile, so it would lie — hence -l (login shell) here.
+	out, _ := exec.Command("ssh", sshTarget, "bash", "-l", "-c", "command -v xclip").Output()
+	resolved := strings.TrimSpace(string(out))
+	if !strings.Contains(resolved, ".local/bin/xclip") {
+		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin/xclip is not first in PATH on the remote")
+		if resolved != "" {
+			fmt.Fprintf(os.Stderr, "  xclip resolves to: %s\n", resolved)
 		}
-		if (d == "/usr/bin" || d == "/bin") && systemBin == -1 {
-			systemBin = i
-		}
-	}
-	if userBin == "" {
-		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin is not in PATH on the remote")
-		fmt.Fprintln(os.Stderr, "  add to ~/.bashrc: export PATH=\"$HOME/.local/bin:$PATH\"")
+		fmt.Fprintln(os.Stderr, "  add to ~/.bashrc or ~/.profile: export PATH=\"$HOME/.local/bin:$PATH\"")
 	}
 
 	fmt.Fprintln(os.Stderr, "nssh: infection complete")
