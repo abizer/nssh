@@ -23,8 +23,11 @@ type Msg struct {
 }
 
 // PublishMessage POSTs a text message to the given ntfy topic URL.
+// The body is our JSON envelope string, but we send it as text/plain so ntfy
+// treats it as the raw message content (not as a JSON publish request, which
+// would look for ntfy-specific fields like "message", "title", etc.).
 func PublishMessage(topicURL, body string) error {
-	resp, err := http.Post(topicURL, "application/json", bytes.NewBufferString(body))
+	resp, err := http.Post(topicURL, "text/plain", bytes.NewBufferString(body))
 	if err != nil {
 		return fmt.Errorf("ntfy publish: %w", err)
 	}

@@ -24,8 +24,8 @@ func TestPublishMessage(t *testing.T) {
 	if gotBody != body {
 		t.Errorf("body = %q, want %q", gotBody, body)
 	}
-	if gotCT != "application/json" {
-		t.Errorf("content-type = %q, want application/json", gotCT)
+	if gotCT != "text/plain" {
+		t.Errorf("content-type = %q, want text/plain", gotCT)
 	}
 }
 
