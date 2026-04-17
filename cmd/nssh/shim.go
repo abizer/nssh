@@ -34,8 +34,10 @@ func shimClipWrite(topicURL, mime string) {
 		os.Exit(1)
 	}
 	if len(data) == 0 {
+		logEvent("clip-write-empty", nil)
 		return
 	}
+	logEvent("clip-write", map[string]any{"mime": mime, "size": len(data)})
 
 	if len(data) <= inlineThreshold && !strings.HasPrefix(mime, "image/") {
 		env := wire.Envelope{
@@ -65,6 +67,7 @@ func shimClipWrite(topicURL, mime string) {
 func shimClipRead(topicURL, mime string) {
 	id := strconv.FormatInt(time.Now().UnixNano(), 36)
 	since := strconv.FormatInt(time.Now().Unix(), 10)
+	logEvent("clip-read-request", map[string]any{"mime": mime, "id": id})
 
 	req := wire.Envelope{Kind: "clip-read-request", ID: id, Mime: mime}
 	body, _ := json.Marshal(req)
@@ -106,8 +109,10 @@ func shimClipRead(topicURL, mime string) {
 			}
 			if strings.HasPrefix(string(data), "ERROR: ") {
 				fmt.Fprintln(os.Stderr, string(data))
+				logEvent("clip-read-error", map[string]any{"id": id, "err": string(data)})
 				os.Exit(1)
 			}
+			logEvent("clip-read-resolved", map[string]any{"id": id, "size": len(data), "inline": true})
 			os.Stdout.Write(data)
 			return
 		}
@@ -117,13 +122,16 @@ func shimClipRead(topicURL, mime string) {
 				fmt.Fprintf(os.Stderr, "nssh: fetch attachment: %v\n", err)
 				os.Exit(1)
 			}
+			logEvent("clip-read-resolved", map[string]any{"id": id, "size": len(data), "inline": false})
 			os.Stdout.Write(data)
 			return
 		}
+		logEvent("clip-read-empty", map[string]any{"id": id})
 		return
 	}
 
 	fmt.Fprintln(os.Stderr, "nssh: clipboard read timed out")
+	logEvent("clip-read-timeout", map[string]any{"id": id})
 	os.Exit(1)
 }
 
@@ -230,6 +238,14 @@ func execFallback(name string, args []string) *exec.Cmd {
 }
 
 func shimMain(persona string, args []string) {
+	// Open the log up front so every shim event is captured. We need the
+	// topic from config; if it's missing, the sub-functions will bail with
+	// a clear error — but we still want logging for the successful paths.
+	cfg := loadConfig()
+	if cfg.Topic != "" {
+		openLog(cfg.Topic, persona)
+		logEvent("shim-start", map[string]any{"persona": persona, "args": args})
+	}
 	switch persona {
 	case "xdg-open", "sensible-browser":
 		doXdgOpen(args)

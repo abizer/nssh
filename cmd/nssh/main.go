@@ -13,6 +13,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"syscall"
 	"time"
@@ -109,8 +110,24 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 	env, ok := wire.Parse(msg.Message)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(msg.Message))
+		logEvent("message-ignored", map[string]any{"size": len(msg.Message)})
 		return
 	}
+	fields := map[string]any{"kind": env.Kind}
+	if env.Mime != "" {
+		fields["mime"] = env.Mime
+	}
+	if env.ID != "" {
+		fields["id"] = env.ID
+	}
+	if env.URL != "" {
+		fields["url"] = env.URL
+	}
+	if msg.Attachment != nil {
+		fields["attachment_size"] = msg.Attachment.Size
+	}
+	logEvent("message-in", fields)
+
 	switch env.Kind {
 	case "open":
 		handleOpen(env.URL, sshTarget)
@@ -208,10 +225,41 @@ func runSession(cmd *exec.Cmd, sigs <-chan os.Signal) error {
 
 func usage() {
 	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh|--infect] <host> [ssh args...]")
-	fmt.Fprintln(os.Stderr, "  --ssh     force plain ssh (skip mosh auto-detect)")
-	fmt.Fprintln(os.Stderr, "  --mosh    force mosh (skip remote preflight)")
-	fmt.Fprintln(os.Stderr, "  --infect  install nssh on the remote and set up symlinks")
+	fmt.Fprintln(os.Stderr, "  --ssh      force plain ssh (skip mosh auto-detect)")
+	fmt.Fprintln(os.Stderr, "  --mosh     force mosh (skip remote preflight)")
+	fmt.Fprintln(os.Stderr, "  --infect   install nssh on the remote and set up symlinks")
+	fmt.Fprintln(os.Stderr, "  --version  print version and build info")
 	os.Exit(1)
+}
+
+func printVersion() {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		fmt.Println("nssh (build info unavailable)")
+		return
+	}
+	v := info.Main.Version
+	if v == "" {
+		v = "(devel)"
+	}
+	fmt.Printf("nssh %s\n", v)
+	fmt.Printf("  go      %s\n", info.GoVersion)
+	for _, s := range info.Settings {
+		switch s.Key {
+		case "vcs.revision":
+			fmt.Printf("  commit  %s\n", s.Value)
+		case "vcs.time":
+			fmt.Printf("  built   %s\n", s.Value)
+		case "vcs.modified":
+			if s.Value == "true" {
+				fmt.Println("  dirty   true")
+			}
+		case "GOOS":
+			fmt.Printf("  os      %s\n", s.Value)
+		case "GOARCH":
+			fmt.Printf("  arch    %s\n", s.Value)
+		}
+	}
 }
 
 func main() {
@@ -244,6 +292,9 @@ func nsshMain() {
 			doInfect = true
 			args = args[1:]
 			continue
+		case "-v", "--version":
+			printVersion()
+			os.Exit(0)
 		case "-h", "--help":
 			usage()
 		}
@@ -280,6 +331,12 @@ func nsshMain() {
 	}
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
 
+	openLog(cfg.Topic, "session")
+	logEvent("session-start", map[string]any{
+		"target": sshTarget,
+		"server": cfg.Server,
+	})
+
 	writeRemoteSession(sshTarget, cfg)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -311,7 +368,12 @@ func nsshMain() {
 
 	err := runSession(session, sigs)
 	resetTerminal()
+	exitCode := 0
 	if exitErr, ok := err.(*exec.ExitError); ok {
-		os.Exit(exitErr.ExitCode())
+		exitCode = exitErr.ExitCode()
+	}
+	logEvent("session-end", map[string]any{"exit": exitCode, "mosh": useMosh})
+	if exitCode != 0 {
+		os.Exit(exitCode)
 	}
 }
