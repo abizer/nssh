@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Install the xdg-open shim + ntfy config on a remote host.
+# Install the nssh-shim + ntfy config on a remote host.
 # Usage: ./setup.sh <host> [extra ssh args...]
 set -euo pipefail
 
@@ -8,6 +8,7 @@ if [[ $# -eq 0 ]]; then
   exit 1
 fi
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ntfy_base="${NSSH_NTFY_BASE:-https://ntfy.abizer.dev}"
 short_host="$(ssh -G "$@" 2>/dev/null | awk '/^hostname /{print $2}' | cut -d. -f1)"
 
@@ -19,42 +20,33 @@ fi
 ntfy_url="${ntfy_base}/reverse-open-${short_host}"
 echo "nssh: installing shim on $1 (topic: ${ntfy_url})"
 
+# Copy the shim script to the remote.
+scp -q "${SCRIPT_DIR}/shim.sh" "$1:~/.local/bin/nssh-shim"
+
+# Configure and symlink on the remote.
 ssh "$@" bash -s -- "$ntfy_url" << 'REMOTE'
 set -euo pipefail
 ntfy_url="$1"
 
 mkdir -p ~/.local/bin
 
-cat > ~/.local/bin/xdg-open << 'SHIM'
-#!/bin/bash
-set -euo pipefail
-url="${1:-}"
-ntfy="$(sed -n 's/^url *= *"\(.*\)"/\1/p' "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy/config.toml" 2>/dev/null)"
-if [[ -z "$ntfy" ]] || [[ ! "$url" =~ ^https?:// ]]; then
-  exec /usr/bin/xdg-open "$@"
-fi
-# JSON-escape \ and " in the URL for the envelope body. Valid URLs won't
-# contain raw control characters; anything else is already %-encoded.
-esc_url=$(printf '%s' "$url" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
-body=$(printf '{"kind":"open","url":"%s"}' "$esc_url")
-if curl -sf -m 5 -H 'Content-Type: application/json' -d "$body" "$ntfy" >/dev/null 2>&1; then
-  exit 0
-else
-  exec /usr/bin/xdg-open "$@"
-fi
-SHIM
+chmod +x ~/.local/bin/nssh-shim
 
-chmod +x ~/.local/bin/xdg-open
-ln -sf ~/.local/bin/xdg-open ~/.local/bin/sensible-browser 2>/dev/null || true
+# Symlink all personas.
+for name in xdg-open sensible-browser xclip wl-copy wl-paste; do
+  ln -sf ~/.local/bin/nssh-shim ~/.local/bin/"$name"
+done
 
+# Write the ntfy config.
 mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy"
 cat > "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy/config.toml" << EOF
 url = "$ntfy_url"
 EOF
 
-echo "Installed xdg-open shim to ~/.local/bin/"
-echo "Configured ntfy endpoint: $ntfy_url"
-echo "Ensure ~/.local/bin is in your PATH (before /usr/bin)"
+echo "Installed nssh-shim to ~/.local/bin/"
+echo "  Symlinks: xdg-open, sensible-browser, xclip, wl-copy, wl-paste"
+echo "  Configured ntfy endpoint: $ntfy_url"
+echo "  Ensure ~/.local/bin is in your PATH (before /usr/bin)"
 REMOTE
 
 echo "nssh: setup complete for $1"
