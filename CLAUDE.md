@@ -27,15 +27,19 @@ just install        # copies nssh to ~/.local/bin/ and ad-hoc signs it
 just test           # runs all tests
 ```
 
-## Remote setup
+## Setup commands
 
 ```bash
-nssh --infect <host>
+nssh infect <host>     # install on a remote host
+nssh infect self       # set up persona symlinks on this machine
+nssh infect --force …  # bypass the desktop-environment safety check
 ```
 
-Downloads the matching binary from the latest GitHub release, scps it to
-the remote, and sets up the shim symlinks. No build tooling or config
-required on the remote.
+`infect <host>` downloads the matching binary from the latest GitHub
+release, scps it to the remote, and asks the freshly-installed binary
+to `infect self`. `infect self` creates symlinks in `~/.local/bin`
+pointing at the running nssh binary (darwin: no-op; desktop linux:
+refuses without --force to avoid shadowing real xclip/xdg-open).
 
 ## Architecture
 

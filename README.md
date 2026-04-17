@@ -52,12 +52,14 @@ just install                   # builds ./nssh and drops it in ~/.local/bin/
 
 **Remote (one-time per host):**
 ```bash
-nssh --infect devbox
+nssh infect devbox
 ```
 
-`--infect` detects the remote's OS/arch via `uname`, downloads the matching binary from the latest GitHub release (caches it locally), scps it to `~/.local/bin/nssh`, and creates the shim symlinks (`xdg-open`, `xclip`, `wl-copy`, `wl-paste`, `sensible-browser`). Ensure `~/.local/bin` is in PATH on the remote — nssh warns if not.
+`infect` detects the remote's OS/arch via `uname`, downloads the matching binary from the latest GitHub release (caches it locally), scps it to `~/.local/bin/nssh`, and asks the freshly-installed nssh to `infect self` — which creates the shim symlinks (`xdg-open`, `xclip`, `wl-copy`, `wl-paste`, `sensible-browser`). Ensure `~/.local/bin` is in PATH on the remote — nssh warns if not.
 
-For nix/home-manager managed hosts, add the flake input and symlinks are set up declaratively.
+`infect` refuses to run on a desktop environment (X11/Wayland detected) to avoid shadowing real clipboard tools. Use `--force` to override.
+
+For nix/home-manager managed hosts, add the flake input and add a single activation hook that runs `nssh infect self` — symlinks get recreated on every activation, safely no-op'd on desktop systems.
 
 ## Usage
 

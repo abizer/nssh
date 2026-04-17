@@ -7,14 +7,18 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"runtime/debug"
 	"strings"
 )
 
-// version returns the module version embedded in the binary. For builds from
-// go install or go build with a tagged module, this is "v1.2.3"; for untagged
-// builds (local dev) it returns "(devel)" or a version with "+dirty" suffix
-// and we fall back to the latest release on GitHub.
+// personas are the argv[0] names nssh answers to when symlinked.
+var personas = []string{"xdg-open", "sensible-browser", "xclip", "wl-copy", "wl-paste"}
+
+// version returns the module version embedded in the binary. For builds with
+// -X main.buildVersion=... set, that wins. Otherwise we read debug.BuildInfo,
+// which is "(devel)" or "+dirty" for local builds and a real tag for
+// go-install builds from a tagged module.
 func version() string {
 	if buildVersion != "" {
 		return buildVersion
@@ -24,6 +28,33 @@ func version() string {
 		return ""
 	}
 	return info.Main.Version
+}
+
+// latestReleaseTag queries the GitHub API for the most recent nssh release.
+func latestReleaseTag() (string, error) {
+	resp, err := http.Get("https://api.github.com/repos/abizer/nssh/releases/latest")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return "", fmt.Errorf("github api: %s", resp.Status)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	const key = `"tag_name":"`
+	i := strings.Index(string(body), key)
+	if i < 0 {
+		return "", fmt.Errorf("no tag_name in github response")
+	}
+	rest := string(body[i+len(key):])
+	j := strings.Index(rest, `"`)
+	if j < 0 {
+		return "", fmt.Errorf("malformed tag_name")
+	}
+	return rest[:j], nil
 }
 
 // looksLikeSemver reports whether v is a clean "vX.Y.Z" tag (no +dirty etc).
@@ -48,32 +79,47 @@ func looksLikeSemver(v string) bool {
 	return true
 }
 
-// latestReleaseTag queries the GitHub API for the most recent nssh release.
-func latestReleaseTag() (string, error) {
-	resp, err := http.Get("https://api.github.com/repos/abizer/nssh/releases/latest")
+// detectLocalDesktop returns (true, reason) if a desktop session appears to be
+// running on the local machine — via DISPLAY/WAYLAND_DISPLAY env, an X11 socket,
+// or a Wayland socket. Returns (false, "") on headless systems.
+func detectLocalDesktop() (bool, string) {
+	if v := os.Getenv("DISPLAY"); v != "" {
+		return true, "$DISPLAY=" + v
+	}
+	if v := os.Getenv("WAYLAND_DISPLAY"); v != "" {
+		return true, "$WAYLAND_DISPLAY=" + v
+	}
+	if entries, err := os.ReadDir("/tmp/.X11-unix"); err == nil && len(entries) > 0 {
+		return true, "/tmp/.X11-unix/" + entries[0].Name()
+	}
+	if matches, _ := filepath.Glob("/run/user/*/wayland-*"); len(matches) > 0 {
+		return true, matches[0]
+	}
+	return false, ""
+}
+
+// detectRemoteDesktop runs the same check on the remote via SSH.
+// Returns (true, reason) on any desktop signal, (false, "") on headless.
+func detectRemoteDesktop(sshTarget string) (bool, string) {
+	script := `
+if [ -n "$DISPLAY" ]; then echo "DISPLAY=$DISPLAY"; exit 0; fi
+if [ -n "$WAYLAND_DISPLAY" ]; then echo "WAYLAND_DISPLAY=$WAYLAND_DISPLAY"; exit 0; fi
+ls /tmp/.X11-unix/ 2>/dev/null | head -1 | grep -q . && { ls /tmp/.X11-unix/ | head -1; exit 0; }
+ls /run/user/*/wayland-* 2>/dev/null | head -1 | grep -q . && { ls /run/user/*/wayland-* | head -1; exit 0; }
+exit 1
+`
+	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash -l -s")
+	cmd.Stdin = strings.NewReader(script)
+	out, err := cmd.Output()
 	if err != nil {
-		return "", err
+		// Exit 1 from our script = no desktop. ssh errors also end up here.
+		return false, ""
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != 200 {
-		return "", fmt.Errorf("github api: %s", resp.Status)
+	line := strings.TrimSpace(string(out))
+	if line == "" {
+		return false, ""
 	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
-	}
-	// Cheap JSON extraction — avoids pulling in encoding/json for one field.
-	const key = `"tag_name":"`
-	i := strings.Index(string(body), key)
-	if i < 0 {
-		return "", fmt.Errorf("no tag_name in github response")
-	}
-	rest := string(body[i+len(key):])
-	j := strings.Index(rest, `"`)
-	if j < 0 {
-		return "", fmt.Errorf("malformed tag_name")
-	}
-	return rest[:j], nil
+	return true, line
 }
 
 // resolveRemoteArch runs `uname -sm` on the remote and maps to Go's GOOS/GOARCH.
@@ -96,7 +142,6 @@ func resolveRemoteArch(sshTarget string) (goos, goarch string, err error) {
 	default:
 		return "", "", fmt.Errorf("unsupported OS: %s", sys)
 	}
-
 	switch mach {
 	case "x86_64", "amd64":
 		goarch = "amd64"
@@ -146,9 +191,7 @@ func downloadBinary(tag, goos, goarch string) (string, error) {
 }
 
 // probeRemoteVersion SSHes in (login shell for PATH) and runs `nssh --version`
-// on the remote. Returns the version string (e.g. "v1.3.0") and whether nssh
-// is installed. A missing binary returns ("", false). Errors probing (network,
-// auth) also return ("", false) — best effort, non-fatal.
+// on the remote. Returns the version string and whether nssh is installed.
 func probeRemoteVersion(sshTarget string) (ver string, installed bool) {
 	out, err := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget,
 		`bash -l -c 'command -v nssh >/dev/null 2>&1 && nssh --version 2>&1 | head -1'`,
@@ -160,7 +203,6 @@ func probeRemoteVersion(sshTarget string) (ver string, installed bool) {
 	if line == "" {
 		return "", false
 	}
-	// Expected: "nssh v1.3.0" or "nssh (devel)" etc.
 	parts := strings.Fields(line)
 	if len(parts) < 2 {
 		return "", false
@@ -169,7 +211,6 @@ func probeRemoteVersion(sshTarget string) (ver string, installed bool) {
 }
 
 // promptYes returns true if stdin is a TTY and the user answers yes.
-// On non-TTY input (e.g. scripted invocations), returns false silently.
 func promptYes(msg string) bool {
 	stat, err := os.Stdin.Stat()
 	if err != nil || stat.Mode()&os.ModeCharDevice == 0 {
@@ -183,31 +224,91 @@ func promptYes(msg string) bool {
 }
 
 // checkRemoteVersion probes the remote's nssh version and warns if missing
-// or mismatched. Prompts to --infect if on a TTY. Non-fatal on any error.
+// or mismatched. Prompts to infect if on a TTY. Non-fatal on any error.
 func checkRemoteVersion(sshTarget string) {
 	localVer := version()
 	if !looksLikeSemver(localVer) {
-		// Dev build — can't meaningfully compare versions.
 		return
 	}
 	remoteVer, installed := probeRemoteVersion(sshTarget)
 	if !installed {
 		fmt.Fprintln(os.Stderr, "nssh: not installed on remote — clipboard bridge will not work")
 		if promptYes("  install it now?") {
-			infect(sshTarget)
+			infectRemote(sshTarget, false)
 		}
 		return
 	}
 	if remoteVer != localVer {
 		fmt.Fprintf(os.Stderr, "nssh: remote version %s, local %s\n", remoteVer, localVer)
 		if promptYes("  update remote to " + localVer + "?") {
-			infect(sshTarget)
+			infectRemote(sshTarget, false)
 		}
 	}
 }
 
-func infect(sshTarget string) {
-	// 1. Detect remote arch.
+// infectSelf sets up the local machine: creates persona symlinks in
+// ~/.local/bin pointing to the currently running nssh binary. Refuses on
+// desktop systems (unless force=true) since symlinking xclip/xdg-open/etc
+// would shadow the user's real clipboard tools.
+//
+// On macOS this is a no-op — Mac apps don't use xclip.
+func infectSelf(force bool) {
+	if runtime.GOOS == "darwin" {
+		fmt.Fprintln(os.Stderr, "nssh: infect self on macOS — nothing to do (personas not needed)")
+		return
+	}
+
+	if !force {
+		if desktop, reason := detectLocalDesktop(); desktop {
+			fmt.Fprintf(os.Stderr, "nssh: desktop environment detected (%s)\n", reason)
+			fmt.Fprintln(os.Stderr, "nssh: refusing to symlink xclip/xdg-open/etc — would shadow your real clipboard tools")
+			fmt.Fprintln(os.Stderr, "nssh: use `nssh infect self --force` to override")
+			os.Exit(1)
+		}
+	}
+
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: cannot resolve own path: %v\n", err)
+		os.Exit(1)
+	}
+	// Resolve symlinks so personas point at the real store path (or wherever
+	// the binary actually lives), not at intermediate symlinks that may move.
+	if resolved, err := filepath.EvalSymlinks(self); err == nil {
+		self = resolved
+	}
+
+	home, _ := os.UserHomeDir()
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: mkdir %s: %v\n", localBin, err)
+		os.Exit(1)
+	}
+
+	for _, p := range personas {
+		linkPath := filepath.Join(localBin, p)
+		_ = os.Remove(linkPath)
+		if err := os.Symlink(self, linkPath); err != nil {
+			fmt.Fprintf(os.Stderr, "nssh: symlink %s: %v\n", linkPath, err)
+			continue
+		}
+	}
+
+	fmt.Fprintf(os.Stderr, "nssh: infect self — symlinks in %s → %s\n", localBin, self)
+}
+
+// infectRemote installs nssh on the remote host and sets up persona symlinks.
+// Checks that the remote isn't a desktop system first.
+func infectRemote(sshTarget string, force bool) {
+	if !force {
+		if desktop, reason := detectRemoteDesktop(sshTarget); desktop {
+			fmt.Fprintf(os.Stderr, "nssh: desktop environment on remote (%s)\n", reason)
+			fmt.Fprintln(os.Stderr, "nssh: refusing to install — would shadow real clipboard tools")
+			fmt.Fprintln(os.Stderr, "nssh: use `nssh infect --force <host>` to override")
+			os.Exit(1)
+		}
+	}
+
 	goos, goarch, err := resolveRemoteArch(sshTarget)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
@@ -215,9 +316,6 @@ func infect(sshTarget string) {
 	}
 	fmt.Fprintf(os.Stderr, "nssh: remote is %s/%s\n", goos, goarch)
 
-	// 2. Resolve release tag. Only use an embedded version if it looks like
-	// a clean semver (vX.Y.Z) — anything with "+dirty", "(devel)", etc.
-	// indicates a local/unreleased build, so fall back to the latest release.
 	tag := version()
 	if !looksLikeSemver(tag) {
 		t, err := latestReleaseTag()
@@ -229,16 +327,13 @@ func infect(sshTarget string) {
 	}
 	fmt.Fprintf(os.Stderr, "nssh: using release %s\n", tag)
 
-	// 3. Download binary (cached).
 	binPath, err := downloadBinary(tag, goos, goarch)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 4. scp to remote.
 	fmt.Fprintf(os.Stderr, "nssh: copying to %s:~/.local/bin/nssh\n", sshTarget)
-	// Ensure ~/.local/bin exists first.
 	if err := exec.Command("ssh", sshTarget, "mkdir -p ~/.local/bin").Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: mkdir: %v\n", err)
 		os.Exit(1)
@@ -250,25 +345,17 @@ func infect(sshTarget string) {
 		os.Exit(1)
 	}
 
-	// 5. Create symlinks on the remote.
-	symlinkScript := `
-set -e
-chmod +x ~/.local/bin/nssh
-for name in xdg-open sensible-browser xclip wl-copy wl-paste; do
-  ln -sf ~/.local/bin/nssh ~/.local/bin/"$name"
-done
-`
-	cmd := exec.Command("ssh", sshTarget, "bash", "-s")
-	cmd.Stdin = strings.NewReader(symlinkScript)
+	// Let the freshly-installed nssh infect the remote itself — this keeps
+	// the symlink list in one place (personas var here) and means nssh always
+	// owns its own symlinks.
+	cmd := exec.Command("ssh", sshTarget, "bash -l -c '~/.local/bin/nssh infect self --force'")
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "nssh: symlink: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nssh: remote infect self: %v\n", err)
 		os.Exit(1)
 	}
 
-	// 6. Sanity-check that our xclip shim resolves first in an interactive
-	// login shell. A non-interactive `ssh host 'echo $PATH'` doesn't source
-	// bashrc/profile, so it would lie — hence -l (login shell) here.
+	// Sanity-check PATH ordering.
 	out, _ := exec.Command("ssh", sshTarget, `bash -l -c 'command -v xclip'`).Output()
 	resolved := strings.TrimSpace(string(out))
 	if !strings.Contains(resolved, ".local/bin/xclip") {

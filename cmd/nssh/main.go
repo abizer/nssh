@@ -247,11 +247,11 @@ func runSession(cmd *exec.Cmd, sigs <-chan os.Signal) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh|--infect] <host> [ssh args...]")
-	fmt.Fprintln(os.Stderr, "  --ssh      force plain ssh (skip mosh auto-detect)")
-	fmt.Fprintln(os.Stderr, "  --mosh     force mosh (skip remote preflight)")
-	fmt.Fprintln(os.Stderr, "  --infect   install nssh on the remote and set up symlinks")
-	fmt.Fprintln(os.Stderr, "  --version  print version and build info")
+	fmt.Fprintln(os.Stderr, "usage:")
+	fmt.Fprintln(os.Stderr, "  nssh [--ssh|--mosh] <host> [ssh args...]   open a session")
+	fmt.Fprintln(os.Stderr, "  nssh infect [--force] <host>               install on a remote host")
+	fmt.Fprintln(os.Stderr, "  nssh infect [--force] self                 symlink personas on this machine")
+	fmt.Fprintln(os.Stderr, "  nssh --version                             print version info")
 	os.Exit(1)
 }
 
@@ -300,15 +300,56 @@ func main() {
 		shimMain(persona, os.Args[1:])
 		return
 	}
-	// Default: nssh session mode (works regardless of binary name).
+	// Invoked as nssh (or equivalent). Route on first arg.
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "infect":
+			infectCmd(os.Args[2:])
+			return
+		case "-v", "--version":
+			printVersion()
+			return
+		case "-h", "--help":
+			usage()
+		}
+	}
 	nsshMain()
+}
+
+// infectCmd handles `nssh infect [--force] <target|self>`.
+func infectCmd(args []string) {
+	force := false
+	var target string
+	for _, a := range args {
+		switch a {
+		case "--force":
+			force = true
+		case "-h", "--help":
+			fmt.Fprintln(os.Stderr, "usage: nssh infect [--force] <host|self>")
+			os.Exit(1)
+		default:
+			if target != "" {
+				fmt.Fprintf(os.Stderr, "nssh: unexpected arg %q\n", a)
+				os.Exit(1)
+			}
+			target = a
+		}
+	}
+	if target == "" {
+		fmt.Fprintln(os.Stderr, "usage: nssh infect [--force] <host|self>")
+		os.Exit(1)
+	}
+	if target == "self" {
+		infectSelf(force)
+		return
+	}
+	infectRemote(target, force)
 }
 
 func nsshMain() {
 	args := os.Args[1:]
 	forceSSH := false
 	forceMosh := false
-	doInfect := false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--ssh":
@@ -319,13 +360,6 @@ func nsshMain() {
 			forceMosh = true
 			args = args[1:]
 			continue
-		case "--infect":
-			doInfect = true
-			args = args[1:]
-			continue
-		case "-v", "--version":
-			printVersion()
-			os.Exit(0)
 		case "-h", "--help":
 			usage()
 		}
@@ -337,11 +371,6 @@ func nsshMain() {
 	}
 	if len(args) < 1 {
 		usage()
-	}
-
-	if doInfect {
-		infect(args[0])
-		return
 	}
 
 	sshArgs := args
