@@ -207,9 +207,10 @@ func runSession(cmd *exec.Cmd, sigs <-chan os.Signal) error {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh] <host> [ssh args...]")
-	fmt.Fprintln(os.Stderr, "  --ssh   force plain ssh (skip mosh auto-detect)")
-	fmt.Fprintln(os.Stderr, "  --mosh  force mosh (skip remote preflight)")
+	fmt.Fprintln(os.Stderr, "usage: nssh [--ssh|--mosh|--infect] <host> [ssh args...]")
+	fmt.Fprintln(os.Stderr, "  --ssh     force plain ssh (skip mosh auto-detect)")
+	fmt.Fprintln(os.Stderr, "  --mosh    force mosh (skip remote preflight)")
+	fmt.Fprintln(os.Stderr, "  --infect  install nssh on the remote and set up symlinks")
 	os.Exit(1)
 }
 
@@ -228,6 +229,7 @@ func nsshMain() {
 	args := os.Args[1:]
 	forceSSH := false
 	forceMosh := false
+	doInfect := false
 	for len(args) > 0 {
 		switch args[0] {
 		case "--ssh":
@@ -236,6 +238,10 @@ func nsshMain() {
 			continue
 		case "--mosh":
 			forceMosh = true
+			args = args[1:]
+			continue
+		case "--infect":
+			doInfect = true
 			args = args[1:]
 			continue
 		case "-h", "--help":
@@ -249,6 +255,11 @@ func nsshMain() {
 	}
 	if len(args) < 1 {
 		usage()
+	}
+
+	if doInfect {
+		infect(args[0])
+		return
 	}
 
 	sshArgs := args

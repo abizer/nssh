@@ -9,12 +9,12 @@ bridge and URL forwarder over ntfy pub/sub.
 ## Repo layout
 
 ```
-cmd/nssh/              The single binary (session wrapper + shim, dispatched on argv[0])
+cmd/nssh/              The single binary (session wrapper + shim + --infect, dispatched on argv[0])
 internal/wire/         Shared envelope type and parser
 internal/ntfy/         Shared ntfy HTTP helpers (publish, attach, fetch)
 internal/clipboard/    macOS pasteboard helpers (pbcopy, pbpaste, pngpaste, osascript)
 docs/                  Design docs
-setup.sh               Cross-compiles + installs nssh + symlinks on a remote host
+.github/workflows/     CI (cache.yml for nix, release.yml for tagged releases)
 justfile               Build recipes
 flake.nix              Nix package
 ```
@@ -23,11 +23,19 @@ flake.nix              Nix package
 
 ```bash
 just build          # builds nssh for local platform
-just build-linux    # cross-compiles nssh for linux/amd64
 just install        # copies nssh to ~/.local/bin/ and ad-hoc signs it
-just setup <host>   # cross-compiles + scp + symlinks on remote
 just test           # runs all tests
 ```
+
+## Remote setup
+
+```bash
+nssh --infect <host>
+```
+
+Downloads the matching binary from the latest GitHub release, scps it to
+the remote, and sets up the shim symlinks. No build tooling or config
+required on the remote.
 
 ## Architecture
 

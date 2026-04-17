@@ -41,19 +41,23 @@ The same channel carries `xdg-open` URLs in the other direction. When `gh auth l
 
 **Local (macOS):**
 ```bash
-just build     # builds ./nssh
-just install   # copies to ~/.local/bin/nssh and ad-hoc signs it
-brew install pngpaste  # for clipboard image support
+brew install abizer/tap/nssh
+brew install pngpaste          # for clipboard image support
+```
+
+Or build from source:
+```bash
+just install                   # builds ./nssh and drops it in ~/.local/bin/
 ```
 
 **Remote (one-time per host):**
 ```bash
-just setup devbox
+nssh --infect devbox
 ```
 
-Cross-compiles nssh for linux/amd64, copies the binary to the remote, and symlinks it as `xdg-open`, `xclip`, `wl-copy`, `wl-paste`. Ensure `~/.local/bin` is in PATH on the remote (before `/usr/bin`). No runtime dependencies on the remote — nssh is a static Go binary.
+`--infect` detects the remote's OS/arch via `uname`, downloads the matching binary from the latest GitHub release (caches it locally), scps it to `~/.local/bin/nssh`, and creates the shim symlinks (`xdg-open`, `xclip`, `wl-copy`, `wl-paste`, `sensible-browser`). Ensure `~/.local/bin` is in PATH on the remote — nssh warns if not.
 
-For nix/home-manager managed hosts, add the flake input and symlinks are set up declaratively — no `just setup` needed.
+For nix/home-manager managed hosts, add the flake input and symlinks are set up declaratively.
 
 ## Usage
 
