@@ -14,7 +14,7 @@ internal/wire/         Shared envelope type and parser
 internal/ntfy/         Shared ntfy HTTP helpers (publish, attach, fetch)
 internal/clipboard/    macOS pasteboard helpers (pbcopy, pbpaste, pngpaste, osascript)
 docs/                  Design docs
-.github/workflows/     CI (cache.yml for nix, release.yml for tagged releases)
+.github/workflows/     CI (cachix.yaml for nix, release.yml for tagged releases)
 justfile               Build recipes
 flake.nix              Nix package
 ```
