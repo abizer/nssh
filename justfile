@@ -1,12 +1,16 @@
-build goos="" goarch="":
-  GOOS={{goos}} GOARCH={{goarch}} go build -o nssh{{if goarch != "" { "-" + goarch } else { "" } }} ./cmd/nssh
-  GOOS={{goos}} GOARCH={{goarch}} go build -o nssh-shim{{if goarch != "" { "-" + goarch } else { "" } }} ./cmd/nssh-shim
+# Map just's names to Go's GOOS/GOARCH
+go_os := if os() == "macos" { "darwin" } else { os() }
+go_arch := if arch() == "aarch64" { "arm64" } else { arch() }
 
-install: build
-  mv nssh $HOME/.local/bin/nssh
+build:
+  go build -o nssh ./cmd/nssh
+  go build -o nssh-shim ./cmd/nssh-shim
 
 build-linux:
-  just build linux amd64
+  GOOS=linux GOARCH=amd64 go build -o nssh-shim-linux ./cmd/nssh-shim
+
+install: build
+  cp nssh $HOME/.local/bin/nssh
 
 run *args: build
   ./nssh {{ args }}
@@ -15,6 +19,5 @@ test:
   go test ./...
 
 # Install the nssh-shim binary and ntfy config on a remote host.
-# Usage: just setup <host> [extra ssh args...]
 setup host *args: build-linux
   bash setup.sh {{host}} {{args}}

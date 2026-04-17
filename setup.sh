@@ -11,9 +11,9 @@ if [[ $# -eq 0 ]]; then
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# Prefer the cross-compiled binary (nssh-shim-amd64 from `just build-linux`),
+# Prefer the cross-compiled binary (nssh-shim-linux from `just build-linux`),
 # fall back to nssh-shim (from `just build`).
-SHIM="${SCRIPT_DIR}/nssh-shim-amd64"
+SHIM="${SCRIPT_DIR}/nssh-shim-linux"
 if [[ ! -f "$SHIM" ]]; then
   SHIM="${SCRIPT_DIR}/nssh-shim"
 fi
