@@ -159,8 +159,9 @@ func handleOpen(rawURL, sshTarget string) {
 }
 
 type ntfyMsg struct {
-	Event   string `json:"event"`
-	Message string `json:"message"`
+	Event      string          `json:"event"`
+	Message    string          `json:"message"`
+	Attachment *ntfyAttachment `json:"attachment,omitempty"`
 }
 
 // subscribeNtfy streams the ntfy JSON endpoint and dispatches incoming messages.
