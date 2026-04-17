@@ -114,7 +114,39 @@ func resetTerminal() {
 	)
 }
 
-func handleMessage(rawURL, sshTarget string) {
+// envelope is the JSON wire format for messages on the ntfy topic. Every
+// message is a JSON object with at least a "kind" field; fields other than
+// Kind are optional and interpreted per-kind by the dispatcher.
+type envelope struct {
+	Kind string `json:"kind"`
+	URL  string `json:"url,omitempty"`
+}
+
+// parseEnvelope unmarshals a raw ntfy message body. Returns ok=false if the
+// body is not a valid JSON envelope with a non-empty Kind field.
+func parseEnvelope(body string) (envelope, bool) {
+	var env envelope
+	if err := json.Unmarshal([]byte(body), &env); err != nil || env.Kind == "" {
+		return envelope{}, false
+	}
+	return env, true
+}
+
+func handleMessage(body, sshTarget string) {
+	env, ok := parseEnvelope(body)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(body))
+		return
+	}
+	switch env.Kind {
+	case "open":
+		handleOpen(env.URL, sshTarget)
+	default:
+		fmt.Fprintf(os.Stderr, "nssh: unknown envelope kind %q\n", env.Kind)
+	}
+}
+
+func handleOpen(rawURL, sshTarget string) {
 	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
 		return
 	}

@@ -33,7 +33,11 @@ ntfy="$(sed -n 's/^url *= *"\(.*\)"/\1/p' "${XDG_CONFIG_HOME:-$HOME/.config}/ssh
 if [[ -z "$ntfy" ]] || [[ ! "$url" =~ ^https?:// ]]; then
   exec /usr/bin/xdg-open "$@"
 fi
-if curl -sf -m 5 -d "$url" "$ntfy" >/dev/null 2>&1; then
+# JSON-escape \ and " in the URL for the envelope body. Valid URLs won't
+# contain raw control characters; anything else is already %-encoded.
+esc_url=$(printf '%s' "$url" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g')
+body=$(printf '{"kind":"open","url":"%s"}' "$esc_url")
+if curl -sf -m 5 -H 'Content-Type: application/json' -d "$body" "$ntfy" >/dev/null 2>&1; then
   exit 0
 else
   exec /usr/bin/xdg-open "$@"
