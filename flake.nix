@@ -20,7 +20,7 @@
 
             meta = {
               description = "SSH/mosh wrapper with clipboard bridge and xdg-open forwarding via ntfy";
-              homepage = "https://github.com/abizer/ssh-reverse-ntfy";
+              homepage = "https://github.com/abizer/nssh";
               license = pkgs.lib.licenses.mit;
               mainProgram = "nssh";
             };

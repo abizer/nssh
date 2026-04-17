@@ -1,3 +1,3 @@
-module github.com/abizer/ssh-reverse-ntfy
+module github.com/abizer/nssh
 
 go 1.25

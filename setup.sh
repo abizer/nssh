@@ -45,8 +45,8 @@ for name in xdg-open sensible-browser xclip wl-copy wl-paste; do
 done
 
 # Write the ntfy config.
-mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy"
-cat > "${XDG_CONFIG_HOME:-$HOME/.config}/ssh-ntfy/config.toml" << EOF
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nssh"
+cat > "${XDG_CONFIG_HOME:-$HOME/.config}/nssh/config.toml" << EOF
 url = "$ntfy_url"
 EOF
 

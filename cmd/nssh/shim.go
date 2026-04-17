@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/abizer/ssh-reverse-ntfy/internal/ntfy"
-	"github.com/abizer/ssh-reverse-ntfy/internal/wire"
+	"github.com/abizer/nssh/internal/ntfy"
+	"github.com/abizer/nssh/internal/wire"
 )
 
 func readConfig() string {
@@ -25,7 +25,7 @@ func readConfig() string {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config")
 	}
-	path := filepath.Join(dir, "ssh-ntfy", "config.toml")
+	path := filepath.Join(dir, "nssh", "config.toml")
 	data, err := os.ReadFile(path)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: cannot read %s: %v\n", path, err)

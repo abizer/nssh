@@ -1,4 +1,4 @@
-# ssh-reverse-ntfy
+# nssh
 
 Forward clipboard, `xdg-open` calls, and OAuth callbacks between remote SSH/mosh sessions and your local Mac, using [ntfy](https://ntfy.sh) as a message bus. Clipboard bridging works for text of any size and images (PNG), enabling tools like Claude Code to paste screenshots over SSH. Transparently uses `mosh` when both sides have it, for roaming across sleep/network changes; falls back to plain `ssh` otherwise.
 

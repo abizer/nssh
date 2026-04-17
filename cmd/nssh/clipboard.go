@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/abizer/ssh-reverse-ntfy/internal/clipboard"
-	"github.com/abizer/ssh-reverse-ntfy/internal/ntfy"
-	"github.com/abizer/ssh-reverse-ntfy/internal/wire"
+	"github.com/abizer/nssh/internal/clipboard"
+	"github.com/abizer/nssh/internal/ntfy"
+	"github.com/abizer/nssh/internal/wire"
 )
 
 const inlineThreshold = 3 * 1024
