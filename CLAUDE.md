@@ -85,8 +85,9 @@ and images are sent as ntfy attachments (PUT with `Filename` + `X-Message` heade
 ### Topic convention
 
 Each connection gets a random topic (`nssh_<random>`) by default — unguessable,
-no config required. nssh writes the server + topic to `~/.config/nssh/session`
-on the remote before launching the shell. The shim reads this file.
+no config required. nssh writes the server + topic to `~/.local/state/nssh/session`
+on the remote before launching the shell (and seeds a `session-open` event into
+the JSONL log). The shim reads this file.
 
 Optional `~/.config/nssh/config.toml` on either side to pin values:
 ```toml

@@ -124,7 +124,7 @@ Small text (≤3KB) is base64-inlined. Larger payloads and images use ntfy attac
 
 ## Configuration
 
-**Zero config required.** By default, nssh uses the public [ntfy.sh](https://ntfy.sh) server and generates a random, unguessable topic (`nssh_<random>`) for each connection. The topic is written to `~/.config/nssh/session` on the remote at connect time.
+**Zero config required.** By default, nssh uses the public [ntfy.sh](https://ntfy.sh) server and generates a random, unguessable topic (`nssh_<random>`) for each connection. The topic is written to `~/.local/state/nssh/session` on the remote at connect time (ephemeral state, not config).
 
 To pin settings, create `~/.config/nssh/config.toml` (on either side):
 

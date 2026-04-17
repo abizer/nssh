@@ -16,23 +16,13 @@ var (
 	logSide  string // "session" (local) or persona name (remote shim)
 )
 
-// logDir returns ~/.local/state/nssh (respecting XDG_STATE_HOME).
-func logDir() string {
-	dir := os.Getenv("XDG_STATE_HOME")
-	if dir == "" {
-		home, _ := os.UserHomeDir()
-		dir = filepath.Join(home, ".local", "state")
-	}
-	return filepath.Join(dir, "nssh")
-}
-
 // openLog opens the per-topic JSONL log file for appending. Silently no-ops
 // if NSSH_LOG=0 or the file can't be opened — logging is best-effort.
 func openLog(topic, side string) {
 	if os.Getenv("NSSH_LOG") == "0" {
 		return
 	}
-	dir := logDir()
+	dir := stateDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return
 	}

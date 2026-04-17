@@ -24,15 +24,38 @@ import (
 
 var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
 
-// writeRemoteSession writes the session file to the remote host so the shim
-// knows which ntfy server/topic to use. Runs a quick SSH command before the
-// interactive session starts.
+// writeRemoteSession writes the session file and seeds the log on the remote
+// host so the shim knows which ntfy server/topic to use, and so there's a
+// canonical "session opened" event before any shim fires. Runs one SSH command
+// before the interactive session starts.
 func writeRemoteSession(sshTarget string, cfg nsshConfig) {
-	script := fmt.Sprintf(
-		`mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/nssh" && printf 'server = "%s"\ntopic = "%s"\n' > "${XDG_CONFIG_HOME:-$HOME/.config}/nssh/session"`,
-		cfg.Server, cfg.Topic,
-	)
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, script)
+	event := map[string]any{
+		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
+		"event":   "session-open",
+		"side":    "session-init",
+		"server":  cfg.Server,
+		"topic":   cfg.Topic,
+		"target":  sshTarget,
+		"version": buildVersion,
+	}
+	eventJSON, _ := json.Marshal(event)
+
+	// Heredocs with quoted delimiters ('EOF') prevent any shell expansion
+	// inside, so TOML and JSON go through verbatim regardless of contents.
+	script := fmt.Sprintf(`set -e
+dir="${XDG_STATE_HOME:-$HOME/.local/state}/nssh"
+mkdir -p "$dir"
+cat > "$dir/session" <<'NSSH_SESSION_EOF'
+server = "%s"
+topic = "%s"
+NSSH_SESSION_EOF
+cat >> "$dir/nssh.%s.jsonl" <<'NSSH_LOG_EOF'
+%s
+NSSH_LOG_EOF
+`, cfg.Server, cfg.Topic, cfg.Topic, string(eventJSON))
+
+	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash", "-s")
+	cmd.Stdin = strings.NewReader(script)
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: failed to write session config on remote: %v\n", err)
 		// Non-fatal — shim may still work if remote has a pinned config.toml.

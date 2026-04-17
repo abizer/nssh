@@ -17,11 +17,23 @@ type nsshConfig struct {
 }
 
 // configDir returns ~/.config/nssh (respecting XDG_CONFIG_HOME).
+// Used for persistent config: config.toml.
 func configDir() string {
 	dir := os.Getenv("XDG_CONFIG_HOME")
 	if dir == "" {
 		home, _ := os.UserHomeDir()
 		dir = filepath.Join(home, ".config")
+	}
+	return filepath.Join(dir, "nssh")
+}
+
+// stateDir returns ~/.local/state/nssh (respecting XDG_STATE_HOME).
+// Used for ephemeral state: the session file, logs.
+func stateDir() string {
+	dir := os.Getenv("XDG_STATE_HOME")
+	if dir == "" {
+		home, _ := os.UserHomeDir()
+		dir = filepath.Join(home, ".local", "state")
 	}
 	return filepath.Join(dir, "nssh")
 }
@@ -52,14 +64,14 @@ func readTOML(path string) map[string]string {
 
 // loadConfig resolves the ntfy server and topic from (in priority order):
 //  1. Environment variables (NSSH_NTFY_BASE)
-//  2. ~/.config/nssh/config.toml (server, topic)
-//  3. ~/.config/nssh/session (server, topic — written by nssh at connect time)
+//  2. ~/.config/nssh/config.toml (server, topic) — persistent user config
+//  3. ~/.local/state/nssh/session (server, topic) — written by nssh at connect time
 //  4. Defaults: server=https://ntfy.sh, topic=<generated>
 func loadConfig() nsshConfig {
 	cfg := nsshConfig{Server: defaultServer}
 
 	// Session file (written by nssh session mode at connect time).
-	session := readTOML(filepath.Join(configDir(), "session"))
+	session := readTOML(filepath.Join(stateDir(), "session"))
 	if session["server"] != "" {
 		cfg.Server = session["server"]
 	}
