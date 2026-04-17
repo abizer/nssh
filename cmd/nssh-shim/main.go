@@ -212,6 +212,17 @@ func doXclip(args []string) {
 		os.Exit(cmd.ProcessState.ExitCode())
 	}
 
+	// TARGETS query: return the types our bridge supports. Apps like Claude
+	// Code probe this before attempting an image read.
+	if direction == "out" && mime == "TARGETS" {
+		fmt.Println("TARGETS")
+		fmt.Println("image/png")
+		fmt.Println("text/plain")
+		fmt.Println("UTF8_STRING")
+		fmt.Println("STRING")
+		return
+	}
+
 	topicURL := readConfig()
 	switch direction {
 	case "in":
