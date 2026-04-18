@@ -137,19 +137,34 @@ func shimClipRead(topicURL, mime string) {
 
 // -- shim personas --
 
+// runFallback execs /usr/bin/<name>, propagating its exit code. Used when
+// the URL/selection isn't something we bridge (non-http xdg-open arg,
+// non-clipboard xclip selection).
+func runFallback(name string, args []string) {
+	cmd := execFallback(name, args)
+	if err := cmd.Run(); err != nil {
+		// Binary missing or failed to start.
+		fmt.Fprintf(os.Stderr, "nssh: fallback /usr/bin/%s: %v\n", name, err)
+		os.Exit(1)
+	}
+	os.Exit(cmd.ProcessState.ExitCode())
+}
+
 func doXdgOpen(args []string) {
 	if len(args) == 0 || (!strings.HasPrefix(args[0], "http://") && !strings.HasPrefix(args[0], "https://")) {
-		cmd := execFallback("xdg-open", args)
-		cmd.Run()
-		os.Exit(cmd.ProcessState.ExitCode())
+		// Non-URL arg (file path, etc) — not something we bridge.
+		runFallback("xdg-open", args)
 	}
 	topicURL := shimTopicURL()
 	env := wire.Envelope{Kind: "open", URL: args[0]}
 	body, _ := json.Marshal(env)
 	if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
-		cmd := execFallback("xdg-open", args)
-		cmd.Run()
-		os.Exit(cmd.ProcessState.ExitCode())
+		// Surface the actual publish error before falling through. Without
+		// this we silently exit 255 (system xdg-open's exit code on headless
+		// hosts), which gives no clue what went wrong (e.g. ntfy 429s).
+		fmt.Fprintf(os.Stderr, "nssh: publish failed: %v\n", err)
+		logEvent("publish-failed", map[string]any{"kind": "open", "err": err.Error()})
+		runFallback("xdg-open", args)
 	}
 }
 
