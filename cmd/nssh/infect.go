@@ -1,6 +1,8 @@
 package main
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"fmt"
 	"io"
 	"net/http"
@@ -153,8 +155,9 @@ func resolveRemoteArch(sshTarget string) (goos, goarch string, err error) {
 	return goos, goarch, nil
 }
 
-// downloadBinary fetches nssh-<goos>-<goarch> from the given release tag,
-// caching in ~/.cache/nssh/releases/<tag>/<goos>-<goarch>/nssh.
+// downloadBinary fetches the goreleaser release tarball for the given tag and
+// platform and extracts the nssh binary into
+// ~/.cache/nssh/releases/<tag>/<goos>-<goarch>/nssh.
 func downloadBinary(tag, goos, goarch string) (string, error) {
 	home, _ := os.UserHomeDir()
 	cacheDir := filepath.Join(home, ".cache", "nssh", "releases", tag, goos+"-"+goarch)
@@ -166,7 +169,8 @@ func downloadBinary(tag, goos, goarch string) (string, error) {
 		return "", err
 	}
 
-	url := fmt.Sprintf("https://github.com/abizer/nssh/releases/download/%s/nssh-%s-%s", tag, goos, goarch)
+	version := strings.TrimPrefix(tag, "v")
+	url := fmt.Sprintf("https://github.com/abizer/nssh/releases/download/%s/nssh_%s_%s_%s.tar.gz", tag, version, goos, goarch)
 	fmt.Fprintf(os.Stderr, "nssh: downloading %s\n", url)
 
 	resp, err := http.Get(url)
@@ -178,16 +182,39 @@ func downloadBinary(tag, goos, goarch string) (string, error) {
 		return "", fmt.Errorf("download: %s", resp.Status)
 	}
 
-	f, err := os.OpenFile(cachePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	gz, err := gzip.NewReader(resp.Body)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("gzip: %w", err)
 	}
-	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
-		os.Remove(cachePath)
-		return "", err
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return "", fmt.Errorf("nssh binary not found in archive")
+		}
+		if err != nil {
+			return "", fmt.Errorf("tar: %w", err)
+		}
+		if filepath.Base(hdr.Name) != "nssh" {
+			continue
+		}
+		f, err := os.OpenFile(cachePath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+		if err != nil {
+			return "", err
+		}
+		if _, err := io.Copy(f, tr); err != nil {
+			f.Close()
+			os.Remove(cachePath)
+			return "", err
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(cachePath)
+			return "", err
+		}
+		return cachePath, nil
 	}
-	return cachePath, nil
 }
 
 // probeRemoteVersion SSHes in (login shell for PATH) and runs `nssh --version`

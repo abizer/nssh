@@ -1,0 +1,54 @@
+version: 2
+
+project_name: nssh
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: nssh
+    main: ./cmd/nssh
+    binary: nssh
+    env:
+      - CGO_ENABLED=0
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.buildVersion=v{{.Version}}
+
+archives:
+  - id: nssh
+    ids: [nssh]
+    formats: [tar.gz]
+
+checksum:
+  name_template: "checksums.txt"
+
+brews:
+  - name: nssh
+    repository:
+      owner: abizer
+      name: homebrew-tap
+      branch: master
+      token: "{{ .Env.TAP_TOKEN }}"
+    directory: Formula
+    homepage: "https://github.com/abizer/nssh"
+    description: "Paste images into Claude Code over SSH"
+    license: "MIT"
+    commit_author:
+      name: github-actions[bot]
+      email: github-actions[bot]@users.noreply.github.com
+    commit_msg_template: "nssh {{ .Tag }}"
+    install: |
+      bin.install "nssh"
+    test: |
+      assert_match "usage: nssh", shell_output("#{bin}/nssh 2>&1", 1)
+
+release:
+  github:
+    owner: abizer
+    name: nssh
+
+changelog:
+  disable: true
