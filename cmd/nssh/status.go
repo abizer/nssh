@@ -257,6 +257,7 @@ func tailOne(path, label string, out chan<- string, stop <-chan struct{}) {
 	// Start at end — only want new events.
 	_, _ = f.Seek(0, io.SeekEnd)
 	reader := bufio.NewReader(f)
+	var partial string
 
 	for {
 		select {
@@ -266,10 +267,7 @@ func tailOne(path, label string, out chan<- string, stop <-chan struct{}) {
 		}
 		line, err := reader.ReadString('\n')
 		if err == io.EOF {
-			if line != "" {
-				// partial line — push back by seeking; simplest is to drop,
-				// next poll will pick up the full line once written fully
-			}
+			partial += line
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -277,7 +275,8 @@ func tailOne(path, label string, out chan<- string, stop <-chan struct{}) {
 			fmt.Fprintf(os.Stderr, "nssh: read %s: %v\n", path, err)
 			return
 		}
-		out <- formatEvent(strings.TrimRight(line, "\n"), label)
+		out <- formatEvent(strings.TrimRight(partial+line, "\n"), label)
+		partial = ""
 	}
 }
 
