@@ -302,6 +302,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  nssh [--ssh|--mosh] <host> [ssh args...]   open a session")
 	fmt.Fprintln(os.Stderr, "  nssh infect [--force] <host>               install on a remote host")
 	fmt.Fprintln(os.Stderr, "  nssh infect [--force] self                 symlink personas on this machine")
+	fmt.Fprintln(os.Stderr, "  nssh status [--tail]                       show active sessions")
 	fmt.Fprintln(os.Stderr, "  nssh --version                             print version info")
 	os.Exit(1)
 }
@@ -356,6 +357,9 @@ func main() {
 		switch os.Args[1] {
 		case "infect":
 			infectCmd(os.Args[2:])
+			return
+		case "status":
+			statusCmd(os.Args[2:])
 			return
 		case "-v", "--version":
 			printVersion()
@@ -448,6 +452,12 @@ func nsshMain() {
 		"server": cfg.Server,
 	})
 
+	sessionFile, err := registerSession(cfg, sshTarget)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: register session: %v\n", err)
+	}
+	defer unregisterSession(sessionFile)
+
 	// One SSH login-shell to probe version, write the session file, and seed
 	// the remote JSONL log before the interactive session starts.
 	remoteVer := prepareRemote(sshTarget, cfg)
@@ -493,13 +503,14 @@ func nsshMain() {
 		session = exec.Command("ssh", sshArgs...)
 	}
 
-	err := runSession(session, sigs)
+	sessErr := runSession(session, sigs)
 	resetTerminal()
 	exitCode := 0
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	if exitErr, ok := sessErr.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	}
 	logEvent("session-end", map[string]any{"exit": exitCode, "mosh": useMosh})
+	unregisterSession(sessionFile) // defers don't fire under os.Exit
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}
