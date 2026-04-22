@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -153,23 +154,18 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 	env, ok := wire.Parse(msg.Message)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(msg.Message))
-		logEvent("message-ignored", map[string]any{"size": len(msg.Message)})
+		logEvent("msg-unknown", map[string]any{"size": len(msg.Message)})
 		return
 	}
-	fields := map[string]any{"kind": env.Kind}
-	if env.Mime != "" {
-		fields["mime"] = env.Mime
-	}
-	if env.ID != "" {
-		fields["id"] = env.ID
-	}
-	if env.URL != "" {
-		fields["url"] = env.URL
-	}
+	size := 0
 	if msg.Attachment != nil {
-		fields["attachment_size"] = msg.Attachment.Size
+		size = int(msg.Attachment.Size)
+	} else if env.Body != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(env.Body); err == nil {
+			size = len(decoded)
+		}
 	}
-	logEvent("message-in", fields)
+	logMessage("in", env, size)
 
 	switch env.Kind {
 	case "open":

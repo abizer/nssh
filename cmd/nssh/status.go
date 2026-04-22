@@ -164,11 +164,11 @@ func printSessions(locals []sessionInfo, remote *sessionInfo) {
 	now := time.Now()
 	if len(locals) > 0 {
 		fmt.Println("active local sessions:")
-		fmt.Printf("  %-8s %-20s %-28s %-10s %s\n", "PID", "TARGET", "TOPIC", "UPTIME", "LOG")
+		fmt.Printf("  %-8s %-20s %-28s %s\n", "PID", "TARGET", "TOPIC", "UPTIME")
 		for _, s := range locals {
-			fmt.Printf("  %-8d %-20s %-28s %-10s %s\n",
+			fmt.Printf("  %-8d %-20s %-28s %s\n",
 				s.PID, truncate(s.Target, 20), truncate(s.Topic, 28),
-				shortDuration(now.Sub(s.Started)), shortPath(s.Log))
+				shortDuration(now.Sub(s.Started)))
 		}
 	}
 	if remote != nil {
@@ -178,7 +178,6 @@ func printSessions(locals []sessionInfo, remote *sessionInfo) {
 		fmt.Println("remote session:")
 		fmt.Printf("  topic:   %s\n", remote.Topic)
 		fmt.Printf("  server:  %s\n", remote.Server)
-		fmt.Printf("  log:     %s\n", shortPath(remote.Log))
 		if !remote.Started.IsZero() {
 			fmt.Printf("  started: %s (%s ago)\n",
 				remote.Started.Local().Format(time.RFC3339),
@@ -293,6 +292,13 @@ func formatEvent(raw, label string) string {
 	}
 	event, _ := m["event"].(string)
 
+	switch event {
+	case "msg-send":
+		return formatWireMessage(label, ts, "→", m)
+	case "msg-recv":
+		return formatWireMessage(label, ts, "←", m)
+	}
+
 	var keys []string
 	for k := range m {
 		switch k {
@@ -312,4 +318,37 @@ func formatEvent(raw, label string) string {
 		fmt.Fprintf(&sb, " %s=%v", k, m[k])
 	}
 	return sb.String()
+}
+
+func formatWireMessage(label, ts, arrow string, m map[string]any) string {
+	kind, _ := m["kind"].(string)
+	mime, _ := m["mime"].(string)
+	urlStr, _ := m["url"].(string)
+	var size int64
+	if v, ok := m["size"].(float64); ok {
+		size = int64(v)
+	}
+
+	var detail strings.Builder
+	switch {
+	case urlStr != "":
+		fmt.Fprintf(&detail, " %s", urlStr)
+	case mime != "":
+		fmt.Fprintf(&detail, " %s", mime)
+	}
+	if size > 0 {
+		fmt.Fprintf(&detail, " (%s)", humanSize(size))
+	}
+	return fmt.Sprintf("[%s] %s %s %s%s", label, ts, arrow, kind, detail.String())
+}
+
+func humanSize(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	default:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	}
 }

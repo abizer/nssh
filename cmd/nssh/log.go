@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/abizer/nssh/v2/internal/wire"
 )
 
 var (
@@ -63,4 +65,30 @@ func logEvent(event string, fields map[string]any) {
 func logErr(where string, err error) {
 	fmt.Fprintf(os.Stderr, "nssh: %s: %v\n", where, err)
 	logEvent("error", map[string]any{"where": where, "err": err.Error()})
+}
+
+// logMessage emits a msg-send or msg-recv event with a consistent schema so
+// both sides of the tunnel produce the same wire-event shape. "dir" is "in"
+// when the envelope arrived from the topic, "out" when we're publishing.
+// size is the payload size in bytes — attachment size for images, decoded
+// body length for inline text, 0 if unknown.
+func logMessage(dir string, env wire.Envelope, size int) {
+	event := "msg-recv"
+	if dir == "out" {
+		event = "msg-send"
+	}
+	fields := map[string]any{"kind": env.Kind}
+	if env.Mime != "" {
+		fields["mime"] = env.Mime
+	}
+	if env.ID != "" {
+		fields["id"] = env.ID
+	}
+	if env.URL != "" {
+		fields["url"] = env.URL
+	}
+	if size > 0 {
+		fields["size"] = size
+	}
+	logEvent(event, fields)
 }

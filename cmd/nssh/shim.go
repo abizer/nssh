@@ -34,24 +34,19 @@ func shimClipWrite(topicURL, mime string) {
 		os.Exit(1)
 	}
 	if len(data) == 0 {
-		logEvent("clip-write-empty", nil)
+		logEvent("clip-write-empty", map[string]any{"mime": mime})
 		return
 	}
-	logEvent("clip-write", map[string]any{"mime": mime, "size": len(data)})
 
+	env := wire.Envelope{Kind: "clip-write", Mime: mime}
 	if len(data) <= inlineThreshold && !strings.HasPrefix(mime, "image/") {
-		env := wire.Envelope{
-			Kind: "clip-write",
-			Mime: mime,
-			Body: base64.StdEncoding.EncodeToString(data),
-		}
+		env.Body = base64.StdEncoding.EncodeToString(data)
 		body, _ := json.Marshal(env)
 		if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		env := wire.Envelope{Kind: "clip-write", Mime: mime}
 		msg, _ := json.Marshal(env)
 		filename := "clip.dat"
 		if strings.HasPrefix(mime, "image/png") {
@@ -62,12 +57,12 @@ func shimClipWrite(topicURL, mime string) {
 			os.Exit(1)
 		}
 	}
+	logMessage("out", env, len(data))
 }
 
 func shimClipRead(topicURL, mime string) {
 	id := strconv.FormatInt(time.Now().UnixNano(), 36)
 	since := strconv.FormatInt(time.Now().Unix(), 10)
-	logEvent("clip-read-request", map[string]any{"mime": mime, "id": id})
 
 	req := wire.Envelope{Kind: "clip-read-request", ID: id, Mime: mime}
 	body, _ := json.Marshal(req)
@@ -75,6 +70,7 @@ func shimClipRead(topicURL, mime string) {
 		fmt.Fprintf(os.Stderr, "nssh: publish read request: %v\n", err)
 		os.Exit(1)
 	}
+	logMessage("out", req, 0)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -112,7 +108,7 @@ func shimClipRead(topicURL, mime string) {
 				logEvent("clip-read-error", map[string]any{"id": id, "err": string(data)})
 				os.Exit(1)
 			}
-			logEvent("clip-read-resolved", map[string]any{"id": id, "size": len(data), "inline": true})
+			logMessage("in", env, len(data))
 			os.Stdout.Write(data)
 			return
 		}
@@ -122,7 +118,7 @@ func shimClipRead(topicURL, mime string) {
 				fmt.Fprintf(os.Stderr, "nssh: fetch attachment: %v\n", err)
 				os.Exit(1)
 			}
-			logEvent("clip-read-resolved", map[string]any{"id": id, "size": len(data), "inline": false})
+			logMessage("in", env, len(data))
 			os.Stdout.Write(data)
 			return
 		}
@@ -166,6 +162,7 @@ func doXdgOpen(args []string) {
 		logEvent("publish-failed", map[string]any{"kind": "open", "err": err.Error()})
 		runFallback("xdg-open", args)
 	}
+	logMessage("out", env, 0)
 }
 
 func doXclip(args []string) {
