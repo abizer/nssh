@@ -1,7 +1,10 @@
 # nssh
 
-_Written by [Claude Opus 4.7](https://www.anthropic.com/news/claude-opus-4-7) via Claude Code_
+_Built with [Claude Opus 4.7](https://www.anthropic.com/news/claude-opus-4-7) via Claude Code_
 
+`nssh` bridges your local machine (macOS, primarily) to a headless Linux VM to
+let you use tools like `xdg-open` or `xclip` that otherwise require X and a display to work.
+ 
 Paste images into [Claude Code](https://claude.ai/claude-code) over SSH. Also bridges text clipboard, `xdg-open` URLs, and OAuth callbacks between remote sessions and your local machine — over SSH or mosh.
 
 ## The problem
