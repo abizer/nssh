@@ -7,9 +7,9 @@ import (
 	"os"
 	"strings"
 
-	"github.com/abizer/nssh/internal/clipboard"
-	"github.com/abizer/nssh/internal/ntfy"
-	"github.com/abizer/nssh/internal/wire"
+	"github.com/abizer/nssh/v2/internal/clipboard"
+	"github.com/abizer/nssh/v2/internal/ntfy"
+	"github.com/abizer/nssh/v2/internal/wire"
 )
 
 const inlineThreshold = 3 * 1024
