@@ -24,11 +24,11 @@ import (
 
 var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
 
-// writeRemoteSession writes the session file and seeds the log on the remote
-// host so the shim knows which ntfy server/topic to use, and so there's a
-// canonical "session opened" event before any shim fires. Runs one SSH command
-// before the interactive session starts.
-func writeRemoteSession(sshTarget string, cfg nsshConfig) {
+// prepareRemote probes the remote's nssh version and writes the session file +
+// seeds the JSONL log in a single SSH login-shell invocation. Returns the
+// remote nssh version, or "" if not installed / unreadable. Non-fatal on
+// errors — shim may still work with a pinned config.toml or no log at all.
+func prepareRemote(sshTarget string, cfg nsshConfig) string {
 	event := map[string]any{
 		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
 		"event":   "session-open",
@@ -40,9 +40,15 @@ func writeRemoteSession(sshTarget string, cfg nsshConfig) {
 	}
 	eventJSON, _ := json.Marshal(event)
 
-	// Heredocs with quoted delimiters ('EOF') prevent any shell expansion
-	// inside, so TOML and JSON go through verbatim regardless of contents.
+	// bash -l so PATH includes ~/.local/bin even for non-interactive sessions.
+	// Heredocs with quoted delimiters ('EOF') prevent shell expansion inside,
+	// so TOML and JSON pass through verbatim regardless of contents.
 	script := fmt.Sprintf(`set -e
+if command -v nssh >/dev/null 2>&1; then
+  echo "NSSH_VERSION: $(nssh --version 2>/dev/null | head -1 | awk '{print $2}')"
+else
+  echo "NSSH_VERSION: none"
+fi
 dir="${XDG_STATE_HOME:-$HOME/.local/state}/nssh"
 mkdir -p "$dir"
 cat > "$dir/session" <<'NSSH_SESSION_EOF'
@@ -54,12 +60,26 @@ cat >> "$dir/nssh.%s.jsonl" <<'NSSH_LOG_EOF'
 NSSH_LOG_EOF
 `, cfg.Server, cfg.Topic, cfg.Topic, string(eventJSON))
 
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash", "-s")
+	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash", "-l", "-s")
 	cmd.Stdin = strings.NewReader(script)
-	if err := cmd.Run(); err != nil {
-		fmt.Fprintf(os.Stderr, "nssh: failed to write session config on remote: %v\n", err)
-		// Non-fatal — shim may still work if remote has a pinned config.toml.
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: remote prepare: %v\n", err)
+		return ""
 	}
+	for _, line := range strings.Split(string(out), "\n") {
+		v, ok := strings.CutPrefix(line, "NSSH_VERSION: ")
+		if !ok {
+			continue
+		}
+		v = strings.TrimSpace(v)
+		if v == "" || v == "none" {
+			return ""
+		}
+		return v
+	}
+	return ""
 }
 
 func resolveShortHost(sshArgs []string) string {
@@ -177,10 +197,38 @@ func handleOpen(rawURL, sshTarget string) {
 	}
 }
 
+// deadlineConn wraps net.Conn to push the read deadline forward on every Read.
+// The ntfy server sends keepalive events every ~55s, so if no bytes arrive
+// for well past that window the connection is silently dead (laptop sleep, NAT
+// rebind, proxy drop) — the next Read returns i/o timeout and the subscriber
+// reconnects. Without this, Read can block forever on a zombie TCP socket.
+type deadlineConn struct {
+	net.Conn
+	period time.Duration
+}
+
+func (c *deadlineConn) Read(p []byte) (int, error) {
+	_ = c.Conn.SetReadDeadline(time.Now().Add(c.period))
+	return c.Conn.Read(p)
+}
+
 func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 	topicURL := cfg.topicURL()
 	endpoint := topicURL + "/json"
-	client := &http.Client{}
+
+	dialer := &net.Dialer{KeepAlive: 15 * time.Second}
+	client := &http.Client{
+		Transport: &http.Transport{
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, err := dialer.DialContext(ctx, network, addr)
+				if err != nil {
+					return nil, err
+				}
+				return &deadlineConn{Conn: conn, period: 90 * time.Second}, nil
+			},
+			ResponseHeaderTimeout: 30 * time.Second,
+		},
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -213,6 +261,9 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 			if msg.Event == "message" && msg.Message != "" {
 				go handleMessage(msg, topicURL, sshTarget)
 			}
+		}
+		if err := scanner.Err(); err != nil && ctx.Err() == nil {
+			fmt.Fprintf(os.Stderr, "nssh: ntfy stream ended (%v) — reconnecting\n", err)
 		}
 		resp.Body.Close()
 
@@ -385,10 +436,6 @@ func nsshMain() {
 		return
 	}
 
-	// Version check before session starts — warns if the remote's nssh is
-	// missing or mismatched, offers to re-infect on TTY.
-	checkRemoteVersion(sshTarget)
-
 	cfg := loadConfig()
 	if cfg.Topic == "" {
 		cfg.Topic = generateTopic()
@@ -401,7 +448,23 @@ func nsshMain() {
 		"server": cfg.Server,
 	})
 
-	writeRemoteSession(sshTarget, cfg)
+	// One SSH login-shell to probe version, write the session file, and seed
+	// the remote JSONL log before the interactive session starts.
+	remoteVer := prepareRemote(sshTarget, cfg)
+	if localVer := version(); looksLikeSemver(localVer) {
+		switch {
+		case remoteVer == "":
+			fmt.Fprintln(os.Stderr, "nssh: not installed on remote — clipboard bridge will not work")
+			if promptYes("  install it now?") {
+				infectRemote(sshTarget, false)
+			}
+		case remoteVer != localVer:
+			fmt.Fprintf(os.Stderr, "nssh: remote version %s, local %s\n", remoteVer, localVer)
+			if promptYes("  update remote to " + localVer + "?") {
+				infectRemote(sshTarget, false)
+			}
+		}
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
