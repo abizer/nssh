@@ -18,8 +18,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/abizer/nssh/internal/ntfy"
-	"github.com/abizer/nssh/internal/wire"
+	"github.com/abizer/nssh/v2/internal/ntfy"
+	"github.com/abizer/nssh/v2/internal/wire"
 )
 
 var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
