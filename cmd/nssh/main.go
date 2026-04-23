@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -153,23 +154,18 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 	env, ok := wire.Parse(msg.Message)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(msg.Message))
-		logEvent("message-ignored", map[string]any{"size": len(msg.Message)})
+		logEvent("msg-unknown", map[string]any{"size": len(msg.Message)})
 		return
 	}
-	fields := map[string]any{"kind": env.Kind}
-	if env.Mime != "" {
-		fields["mime"] = env.Mime
-	}
-	if env.ID != "" {
-		fields["id"] = env.ID
-	}
-	if env.URL != "" {
-		fields["url"] = env.URL
-	}
+	size := 0
 	if msg.Attachment != nil {
-		fields["attachment_size"] = msg.Attachment.Size
+		size = int(msg.Attachment.Size)
+	} else if env.Body != "" {
+		if decoded, err := base64.StdEncoding.DecodeString(env.Body); err == nil {
+			size = len(decoded)
+		}
 	}
-	logEvent("message-in", fields)
+	logMessage("in", env, size)
 
 	switch env.Kind {
 	case "open":
@@ -302,6 +298,7 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  nssh [--ssh|--mosh] <host> [ssh args...]   open a session")
 	fmt.Fprintln(os.Stderr, "  nssh infect [--force] <host>               install on a remote host")
 	fmt.Fprintln(os.Stderr, "  nssh infect [--force] self                 symlink personas on this machine")
+	fmt.Fprintln(os.Stderr, "  nssh status [--tail]                       show active sessions")
 	fmt.Fprintln(os.Stderr, "  nssh --version                             print version info")
 	os.Exit(1)
 }
@@ -356,6 +353,9 @@ func main() {
 		switch os.Args[1] {
 		case "infect":
 			infectCmd(os.Args[2:])
+			return
+		case "status":
+			statusCmd(os.Args[2:])
 			return
 		case "-v", "--version":
 			printVersion()
@@ -448,6 +448,12 @@ func nsshMain() {
 		"server": cfg.Server,
 	})
 
+	sessionFile, err := registerSession(cfg, sshTarget)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: register session: %v\n", err)
+	}
+	defer unregisterSession(sessionFile)
+
 	// One SSH login-shell to probe version, write the session file, and seed
 	// the remote JSONL log before the interactive session starts.
 	remoteVer := prepareRemote(sshTarget, cfg)
@@ -493,13 +499,14 @@ func nsshMain() {
 		session = exec.Command("ssh", sshArgs...)
 	}
 
-	err := runSession(session, sigs)
+	sessErr := runSession(session, sigs)
 	resetTerminal()
 	exitCode := 0
-	if exitErr, ok := err.(*exec.ExitError); ok {
+	if exitErr, ok := sessErr.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	}
 	logEvent("session-end", map[string]any{"exit": exitCode, "mosh": useMosh})
+	unregisterSession(sessionFile) // defers don't fire under os.Exit
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}

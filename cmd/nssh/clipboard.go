@@ -70,7 +70,10 @@ func handleClipReadRequest(env wire.Envelope, topicURL string) {
 		resp := wire.Envelope{Kind: "clip-read-response", ID: env.ID}
 		resp.Body = base64.StdEncoding.EncodeToString([]byte("ERROR: " + err.Error()))
 		body, _ := json.Marshal(resp)
-		ntfy.PublishMessage(topicURL, string(body))
+		if perr := ntfy.PublishMessage(topicURL, string(body)); perr != nil {
+			fmt.Fprintf(os.Stderr, "nssh: clip-read error response: %v\n", perr)
+		}
+		logMessage("out", resp, 0)
 		return
 	}
 
@@ -92,4 +95,5 @@ func handleClipReadRequest(env wire.Envelope, topicURL string) {
 			fmt.Fprintf(os.Stderr, "nssh: clip-read response: %v\n", err)
 		}
 	}
+	logMessage("out", resp, len(data))
 }
