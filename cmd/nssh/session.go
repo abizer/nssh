@@ -64,16 +64,22 @@ func nsshMain() {
 		return
 	}
 
-	cfg := loadConfig()
+	cfg := loadSessionConfig()
 	if cfg.Topic == "" {
-		cfg.Topic = generateTopic()
+		if existing := findActiveSessionForHost(shortHost); existing != nil {
+			cfg.Topic = existing.Topic
+			cfg.Server = existing.Server
+			fmt.Fprintf(os.Stderr, "nssh: joining active session for %s (PID %d)\n", shortHost, existing.PID)
+		} else {
+			cfg.Topic = generateTopic()
+		}
 	}
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
 
 	openLog(cfg.Topic, "session")
-	logEvent(LogEvent{Event: "session-start", Target: sshTarget, Server: cfg.Server})
+	logEvent(LogEvent{Event: "session-start", Target: sshTarget, Host: shortHost, Server: cfg.Server})
 
-	sessionFile, err := registerSession(cfg, sshTarget)
+	sessionFile, err := registerSession(cfg, sshTarget, shortHost)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: register session: %v\n", err)
 	}

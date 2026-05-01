@@ -30,11 +30,13 @@ type LogEvent struct {
 
 	// Session lifecycle.
 	Target  string `json:"target,omitempty"`
+	Host    string `json:"host,omitempty"`
 	Server  string `json:"server,omitempty"`
 	Topic   string `json:"topic,omitempty"`
 	Version string `json:"version,omitempty"`
 	Exit    *int   `json:"exit,omitempty"`
 	Mosh    *bool  `json:"mosh,omitempty"`
+	Joined  int    `json:"joined,omitempty"`
 
 	// Shim invocation.
 	Persona string   `json:"persona,omitempty"`
