@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -12,10 +11,9 @@ import (
 )
 
 var (
-	logFile  *os.File
-	logMu    sync.Mutex
-	logTopic string
-	logSide  string // "session" (local) or persona name (remote shim)
+	logFile *os.File
+	logMu   sync.Mutex
+	logSide string // "session" (local) or persona name (remote shim)
 )
 
 // openLog opens the per-topic JSONL log file for appending. Silently no-ops
@@ -34,7 +32,6 @@ func openLog(topic, side string) {
 		return
 	}
 	logFile = f
-	logTopic = topic
 	logSide = side
 }
 
@@ -59,12 +56,6 @@ func logEvent(event string, fields map[string]any) {
 	logMu.Lock()
 	defer logMu.Unlock()
 	logFile.Write(append(data, '\n'))
-}
-
-// logErr logs an error event and also prints to stderr.
-func logErr(where string, err error) {
-	fmt.Fprintf(os.Stderr, "nssh: %s: %v\n", where, err)
-	logEvent("error", map[string]any{"where": where, "err": err.Error()})
 }
 
 // logMessage emits a msg-send or msg-recv event with a consistent schema so

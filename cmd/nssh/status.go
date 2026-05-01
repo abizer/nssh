@@ -196,14 +196,6 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-func shortPath(p string) string {
-	home, _ := os.UserHomeDir()
-	if home != "" && strings.HasPrefix(p, home) {
-		return "~" + p[len(home):]
-	}
-	return p
-}
-
 func shortDuration(d time.Duration) string {
 	if d < time.Minute {
 		return strconv.Itoa(int(d.Seconds())) + "s"
