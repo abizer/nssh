@@ -30,14 +30,14 @@ var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
 // remote nssh version, or "" if not installed / unreadable. Non-fatal on
 // errors — shim may still work with a pinned config.toml or no log at all.
 func prepareRemote(sshTarget string, cfg nsshConfig) string {
-	event := map[string]any{
-		"ts":      time.Now().UTC().Format(time.RFC3339Nano),
-		"event":   "session-open",
-		"side":    "session-init",
-		"server":  cfg.Server,
-		"topic":   cfg.Topic,
-		"target":  sshTarget,
-		"version": buildVersion,
+	event := LogEvent{
+		TS:      time.Now().UTC().Format(time.RFC3339Nano),
+		Event:   "session-open",
+		Side:    "session-init",
+		Server:  cfg.Server,
+		Topic:   cfg.Topic,
+		Target:  sshTarget,
+		Version: buildVersion,
 	}
 	eventJSON, _ := json.Marshal(event)
 
@@ -151,7 +151,7 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 	env, ok := wire.Parse(msg.Message)
 	if !ok {
 		fmt.Fprintf(os.Stderr, "nssh: ignoring unrecognized message (%d bytes)\n", len(msg.Message))
-		logEvent("msg-unknown", map[string]any{"size": len(msg.Message)})
+		logEvent(LogEvent{Event: "msg-unknown", Size: len(msg.Message)})
 		return
 	}
 	size := 0
@@ -440,10 +440,7 @@ func nsshMain() {
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
 
 	openLog(cfg.Topic, "session")
-	logEvent("session-start", map[string]any{
-		"target": sshTarget,
-		"server": cfg.Server,
-	})
+	logEvent(LogEvent{Event: "session-start", Target: sshTarget, Server: cfg.Server})
 
 	sessionFile, err := registerSession(cfg, sshTarget)
 	if err != nil {
@@ -502,7 +499,7 @@ func nsshMain() {
 	if exitErr, ok := sessErr.(*exec.ExitError); ok {
 		exitCode = exitErr.ExitCode()
 	}
-	logEvent("session-end", map[string]any{"exit": exitCode, "mosh": useMosh})
+	logEvent(LogEvent{Event: "session-end", Exit: &exitCode, Mosh: &useMosh})
 	unregisterSession(sessionFile) // defers don't fire under os.Exit
 	if exitCode != 0 {
 		os.Exit(exitCode)
