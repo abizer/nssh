@@ -13,6 +13,8 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // personas are the argv[0] names nssh answers to when symlinked.
@@ -55,26 +57,12 @@ func latestReleaseTag() (string, error) {
 	return rel.TagName, nil
 }
 
-// looksLikeSemver reports whether v is a clean "vX.Y.Z" tag (no +dirty etc).
-func looksLikeSemver(v string) bool {
-	if !strings.HasPrefix(v, "v") || strings.ContainsAny(v, "+ ") {
-		return false
-	}
-	parts := strings.Split(v[1:], ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
+// isReleaseVersion reports whether v is a clean release tag — valid semver
+// with no prerelease (-rc1) and no build metadata (+dirty). Used to gate
+// the version-mismatch nag at session start: dev builds shouldn't prompt
+// the user to overwrite the remote with an in-flight build.
+func isReleaseVersion(v string) bool {
+	return semver.IsValid(v) && semver.Prerelease(v) == "" && semver.Build(v) == ""
 }
 
 // detectLocalDesktop returns (true, reason) if a desktop session appears to be
@@ -295,7 +283,7 @@ func infectRemote(sshTarget string, force bool) {
 	fmt.Fprintf(os.Stderr, "nssh: remote is %s/%s\n", goos, goarch)
 
 	tag := version()
-	if !looksLikeSemver(tag) {
+	if !isReleaseVersion(tag) {
 		t, err := latestReleaseTag()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: couldn't resolve release tag: %v\n", err)

@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/abizer/nssh/v2/internal/ntfy"
 	"github.com/abizer/nssh/v2/internal/wire"
 )
@@ -80,14 +82,14 @@ func nsshMain() {
 	// One SSH login-shell to probe version, write the session file, and seed
 	// the remote JSONL log before the interactive session starts.
 	remoteVer := prepareRemote(sshTarget, cfg)
-	if localVer := version(); looksLikeSemver(localVer) {
+	if localVer := version(); isReleaseVersion(localVer) {
 		switch {
 		case remoteVer == "":
 			fmt.Fprintln(os.Stderr, "nssh: not installed on remote — clipboard bridge will not work")
 			if promptYes("  install it now?") {
 				infectRemote(sshTarget, false)
 			}
-		case remoteVer != localVer:
+		case semver.Compare(remoteVer, localVer) != 0:
 			fmt.Fprintf(os.Stderr, "nssh: remote version %s, local %s\n", remoteVer, localVer)
 			if promptYes("  update remote to " + localVer + "?") {
 				infectRemote(sshTarget, false)

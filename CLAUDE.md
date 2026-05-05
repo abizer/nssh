@@ -102,7 +102,10 @@ Priority: `NSSH_NTFY_BASE` env > config.toml > session file > defaults.
 
 ## Key constraints
 
-- stdlib only — no external Go dependencies
+- Minimize external Go dependencies — prefer stdlib + `golang.org/x/*`
+  modules over third-party. Pull in a dep only when it replaces a
+  hand-rolled re-implementation that's a real correctness or
+  ergonomics liability (current set: `golang.org/x/mod/semver`).
 - Single binary cross-compiles for macOS and Linux with zero runtime deps
 - Never eval or execute received content on local side
 - Only bridge CLIPBOARD selection, not PRIMARY
