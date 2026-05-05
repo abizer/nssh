@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -42,21 +43,16 @@ func latestReleaseTag() (string, error) {
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("github api: %s", resp.Status)
 	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	var rel struct {
+		TagName string `json:"tag_name"`
 	}
-	const key = `"tag_name":"`
-	i := strings.Index(string(body), key)
-	if i < 0 {
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("github api: decode: %w", err)
+	}
+	if rel.TagName == "" {
 		return "", fmt.Errorf("no tag_name in github response")
 	}
-	rest := string(body[i+len(key):])
-	j := strings.Index(rest, `"`)
-	if j < 0 {
-		return "", fmt.Errorf("malformed tag_name")
-	}
-	return rest[:j], nil
+	return rel.TagName, nil
 }
 
 // looksLikeSemver reports whether v is a clean "vX.Y.Z" tag (no +dirty etc).
