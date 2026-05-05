@@ -17,6 +17,7 @@
             src = self;
             vendorHash = null;
             subPackages = [ "cmd/nssh" ];
+            doCheck = true;
 
             meta = {
               description = "SSH/mosh wrapper with clipboard bridge and xdg-open forwarding via ntfy";
