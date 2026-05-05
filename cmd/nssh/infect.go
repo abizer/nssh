@@ -106,9 +106,7 @@ ls /tmp/.X11-unix/ 2>/dev/null | head -1 | grep -q . && { ls /tmp/.X11-unix/ | h
 ls /run/user/*/wayland-* 2>/dev/null | head -1 | grep -q . && { ls /run/user/*/wayland-* | head -1; exit 0; }
 exit 1
 `
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash -l -s")
-	cmd.Stdin = strings.NewReader(script)
-	out, err := cmd.Output()
+	out, err := runRemoteScript(sshTarget, script)
 	if err != nil {
 		// Exit 1 from our script = no desktop. ssh errors also end up here.
 		return false, ""
@@ -314,7 +312,7 @@ func infectRemote(sshTarget string, force bool) {
 	}
 
 	fmt.Fprintf(os.Stderr, "nssh: copying to %s:~/.local/bin/nssh\n", sshTarget)
-	if err := exec.Command("ssh", sshTarget, "mkdir -p ~/.local/bin").Run(); err != nil {
+	if _, err := runRemoteScript(sshTarget, "mkdir -p ~/.local/bin\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: mkdir: %v\n", err)
 		os.Exit(1)
 	}
@@ -327,16 +325,15 @@ func infectRemote(sshTarget string, force bool) {
 
 	// Let the freshly-installed nssh infect the remote itself — this keeps
 	// the symlink list in one place (personas var here) and means nssh always
-	// owns its own symlinks.
-	cmd := exec.Command("ssh", sshTarget, "bash -l -c '~/.local/bin/nssh infect self --force'")
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	// owns its own symlinks. infectSelf writes to stderr (which passes
+	// through), so we discard the captured stdout.
+	if _, err := runRemoteScript(sshTarget, "~/.local/bin/nssh infect self --force\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: remote infect self: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Sanity-check PATH ordering.
-	out, _ := exec.Command("ssh", sshTarget, `bash -l -c 'command -v xclip'`).Output()
+	out, _ := runRemoteScript(sshTarget, "command -v xclip\n")
 	resolved := strings.TrimSpace(string(out))
 	if !strings.Contains(resolved, ".local/bin/xclip") {
 		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin/xclip is not first in PATH on the remote")

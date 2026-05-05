@@ -61,10 +61,7 @@ cat >> "$dir/nssh.%s.jsonl" <<'NSSH_LOG_EOF'
 NSSH_LOG_EOF
 `, cfg.Server, cfg.Topic, cfg.Topic, string(eventJSON))
 
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash", "-l", "-s")
-	cmd.Stdin = strings.NewReader(script)
-	cmd.Stderr = os.Stderr
-	out, err := cmd.Output()
+	out, err := runRemoteScript(sshTarget, script)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: remote prepare: %v\n", err)
 		return ""
