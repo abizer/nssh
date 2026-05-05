@@ -39,23 +39,9 @@ func shimClipWrite(topicURL, mime string) {
 	}
 
 	env := wire.Envelope{Kind: "clip-write", Mime: mime}
-	if len(data) <= inlineThreshold && !strings.HasPrefix(mime, "image/") {
-		env.Body = base64.StdEncoding.EncodeToString(data)
-		body, _ := json.Marshal(env)
-		if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
-			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		msg, _ := json.Marshal(env)
-		filename := "clip.dat"
-		if strings.HasPrefix(mime, "image/png") {
-			filename = "clip.png"
-		}
-		if err := ntfy.PublishAttachment(topicURL, string(msg), data, filename); err != nil {
-			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
-			os.Exit(1)
-		}
+	if err := wire.Publish(topicURL, env, data); err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
+		os.Exit(1)
 	}
 	logMessage("out", env, len(data))
 }
