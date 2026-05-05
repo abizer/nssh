@@ -345,3 +345,34 @@ func infectRemote(sshTarget string, force bool) {
 
 	fmt.Fprintln(os.Stderr, "nssh: infection complete")
 }
+
+// infectCmd parses `nssh infect [--force] <host|self>` and dispatches to
+// infectSelf or infectRemote.
+func infectCmd(args []string) {
+	force := false
+	var target string
+	for _, a := range args {
+		switch a {
+		case "--force":
+			force = true
+		case "-h", "--help":
+			fmt.Fprintln(os.Stderr, "usage: nssh infect [--force] <host|self>")
+			os.Exit(1)
+		default:
+			if target != "" {
+				fmt.Fprintf(os.Stderr, "nssh: unexpected arg %q\n", a)
+				os.Exit(1)
+			}
+			target = a
+		}
+	}
+	if target == "" {
+		fmt.Fprintln(os.Stderr, "usage: nssh infect [--force] <host|self>")
+		os.Exit(1)
+	}
+	if target == "self" {
+		infectSelf(force)
+		return
+	}
+	infectRemote(target, force)
+}
