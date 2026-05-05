@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"strings"
@@ -11,26 +10,22 @@ import (
 	"github.com/abizer/nssh/v2/internal/wire"
 )
 
-func handleClipWrite(env wire.Envelope, att *ntfy.Attachment) {
-	var data []byte
-	var err error
-
-	switch {
-	case env.Body != "":
-		data, err = base64.StdEncoding.DecodeString(env.Body)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "nssh: clip-write: base64 decode: %v\n", err)
+// handleClipWrite writes incoming clipboard data to the local clipboard.
+// body is the pre-decoded inline payload (nil when none); when nil and an
+// attachment is present, the attachment is fetched.
+func handleClipWrite(env wire.Envelope, att *ntfy.Attachment, body []byte) {
+	data := body
+	if data == nil {
+		if att == nil || att.URL == "" {
+			fmt.Fprintln(os.Stderr, "nssh: clip-write: no data (empty body and no attachment)")
 			return
 		}
-	case att != nil && att.URL != "":
+		var err error
 		data, err = ntfy.FetchAttachment(att.URL)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: clip-write: %v\n", err)
 			return
 		}
-	default:
-		fmt.Fprintln(os.Stderr, "nssh: clip-write: no data (empty body and no attachment)")
-		return
 	}
 
 	mime := env.Mime

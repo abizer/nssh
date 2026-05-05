@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
@@ -8,7 +9,14 @@ import (
 	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
+
+// oauthAcceptTimeout caps how long proxyOAuthCallback waits for the browser
+// to make its callback. OAuth flows are normally <1 minute end-to-end; if
+// the user closes the tab, the listener would otherwise leak the port and a
+// goroutine until the nssh session ends.
+const oauthAcceptTimeout = 5 * time.Minute
 
 var localhostRe = regexp.MustCompile(`(?:localhost|127\.0\.0\.1):(\d+)`)
 
@@ -48,9 +56,16 @@ func proxyOAuthCallback(port, sshTarget string) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "nssh: ready for OAuth callback on :%s\n", port)
+	if tcpLn, ok := ln.(*net.TCPListener); ok {
+		_ = tcpLn.SetDeadline(time.Now().Add(oauthAcceptTimeout))
+	}
 	conn, err := ln.Accept()
 	ln.Close()
 	if err != nil {
+		var ne net.Error
+		if errors.As(err, &ne) && ne.Timeout() {
+			fmt.Fprintf(os.Stderr, "nssh: no OAuth callback on :%s within %s — gave up\n", port, oauthAcceptTimeout)
+		}
 		return
 	}
 	defer conn.Close()

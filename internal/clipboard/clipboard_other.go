@@ -2,7 +2,8 @@
 
 // Package clipboard wraps the local-machine clipboard for the nssh session
 // wrapper. Today only macOS is implemented; on other platforms every call
-// returns errUnsupported. See task #13 for Linux client support.
+// returns errUnsupported. A Linux client backend (xclip / wl-clipboard) is
+// the natural follow-up.
 package clipboard
 
 import "errors"

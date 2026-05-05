@@ -102,26 +102,7 @@ func nsshMain() {
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	useMosh := false
-	switch {
-	case forceSSH:
-	case forceMosh:
-		useMosh = true
-	default:
-		if _, err := exec.LookPath("mosh"); err == nil && remoteHasMosh(sshTarget) {
-			useMosh = true
-		}
-	}
-
-	var session *exec.Cmd
-	if useMosh {
-		fmt.Fprintln(os.Stderr, "nssh: using mosh for interactive session")
-		session = exec.Command("mosh", sshTarget)
-		session.Env = append(os.Environ(), "LC_ALL=C.UTF-8", "LANG=C.UTF-8")
-	} else {
-		session = exec.Command("ssh", sshArgs...)
-	}
-
+	session, useMosh := selectTransport(forceSSH, forceMosh, sshArgs, sshTarget)
 	sessErr := runSession(session, sigs)
 	resetTerminal()
 	exitCode := 0
@@ -168,6 +149,31 @@ func resetTerminal() {
 func remoteHasMosh(sshTarget string) bool {
 	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "command -v mosh-server >/dev/null 2>&1")
 	return cmd.Run() == nil
+}
+
+// selectTransport picks ssh or mosh based on the user's flags and (if
+// neither is forced) whether mosh is installed locally and on the remote.
+// Returns the configured exec.Cmd plus a useMosh flag for downstream
+// logging. When mosh is selected we force a UTF-8 locale because mosh's
+// terminal emulation breaks under POSIX/C locales on minimal images.
+func selectTransport(forceSSH, forceMosh bool, sshArgs []string, sshTarget string) (*exec.Cmd, bool) {
+	useMosh := false
+	switch {
+	case forceSSH:
+	case forceMosh:
+		useMosh = true
+	default:
+		if _, err := exec.LookPath("mosh"); err == nil && remoteHasMosh(sshTarget) {
+			useMosh = true
+		}
+	}
+	if useMosh {
+		fmt.Fprintln(os.Stderr, "nssh: using mosh for interactive session")
+		cmd := exec.Command("mosh", sshTarget)
+		cmd.Env = append(os.Environ(), "LC_ALL=C.UTF-8", "LANG=C.UTF-8")
+		return cmd, true
+	}
+	return exec.Command("ssh", sshArgs...), false
 }
 
 // deadlineConn wraps net.Conn to push the read deadline forward on every Read.
@@ -263,13 +269,22 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 		logEvent(LogEvent{Event: "msg-unknown", Size: len(msg.Message)})
 		return
 	}
-	size := 0
+
+	// Decode the inline body once: handlers that need it use this slice and
+	// logMessage uses its length for size accounting.
+	var body []byte
+	if env.Body != "" {
+		decoded, err := base64.StdEncoding.DecodeString(env.Body)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nssh: %s: base64 decode: %v\n", env.Kind, err)
+			return
+		}
+		body = decoded
+	}
+
+	size := len(body)
 	if msg.Attachment != nil {
 		size = int(msg.Attachment.Size)
-	} else if env.Body != "" {
-		if decoded, err := base64.StdEncoding.DecodeString(env.Body); err == nil {
-			size = len(decoded)
-		}
 	}
 	logMessage("in", env, size)
 
@@ -277,7 +292,7 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 	case "open":
 		handleOpen(env.URL, sshTarget)
 	case "clip-write":
-		handleClipWrite(env, msg.Attachment)
+		handleClipWrite(env, msg.Attachment, body)
 	case "clip-read-request":
 		handleClipReadRequest(env, topicURL)
 	case "clip-read-response":
