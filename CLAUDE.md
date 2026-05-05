@@ -110,3 +110,27 @@ Priority: `NSSH_NTFY_BASE` env > config.toml > session file > defaults.
 - Single binary cross-compiles for macOS and Linux with zero runtime deps
 - Never eval or execute received content on local side
 - Only bridge CLIPBOARD selection, not PRIMARY
+
+## Maintaining docs
+
+`docs/internals.md` and `docs/protocol.md` are the precise current-state
+references. Update them in the same change that makes them stale —
+don't ship the code change and document later. Things that require a
+docs touch:
+
+- New or removed envelope `kind` → update the kinds table in
+  `protocol.md` and any flow diagrams in `internals.md` that mention it.
+- New, renamed, or removed `LogEvent` field or event name → update
+  the schema and event vocabulary in `protocol.md`.
+- New config key, env var, or precedence change → update the config
+  section in `protocol.md`.
+- New ntfy endpoint or change to inline-vs-attachment rules → update
+  the endpoints / transport sections in `protocol.md`.
+- New shim persona, transport (e.g. ssh/mosh siblings), or
+  cross-cutting design choice → update the relevant `internals.md`
+  section and the persona table here in CLAUDE.md.
+
+Pure refactors (file splits, helper extractions) usually don't need
+doc updates unless they change a name the docs reference. The README
+is for the pitch and the install path; everything precise lives under
+`docs/`.
