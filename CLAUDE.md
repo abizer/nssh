@@ -13,6 +13,7 @@ cmd/nssh/              The single binary (session wrapper + shim + --infect, dis
 internal/wire/         Shared envelope type and parser
 internal/ntfy/         Shared ntfy HTTP helpers (publish, attach, fetch)
 internal/clipboard/    macOS pasteboard helpers (pbcopy, pbpaste, pngpaste, osascript)
+docs/                  internals.md (architecture, flows) + protocol.md (wire/log schema)
 .github/workflows/     CI (cachix.yaml for nix, release.yml for tagged releases)
 justfile               Build recipes
 flake.nix              Nix package

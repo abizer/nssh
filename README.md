@@ -4,6 +4,12 @@ _Built with [Claude Opus 4.7](https://www.anthropic.com/news/claude-opus-4-7) vi
 
 `nssh` bridges your local machine (macOS, primarily) to a headless Linux VM to
 let you use tools like `xdg-open` or `xclip` that otherwise require X and a display to work.
+
+It was originally written to let OAuth-based authentication flows that expect 
+you to click a link to complete the login process open the browser on my laptop instead of 
+having `xdg-open` in the VM throw an error. It did so by adding a shim script ahead of `xdg-open` 
+in $PATH that would emit the url to a topic on ntfy.sh, with a corresponding local helper subscribed 
+to that topic that would open up an SSH port forward back to the VM to return the OAuth token.
  
 Paste images into [Claude Code](https://claude.ai/claude-code) over SSH. Also bridges text clipboard, `xdg-open` URLs, and OAuth callbacks between remote sessions and your local machine — over SSH or mosh.
 
@@ -146,6 +152,14 @@ The `NSSH_NTFY_BASE` environment variable overrides the server.
 - **Remote:** Linux with `~/.local/bin` in PATH. Zero runtime deps.
 - **Optional:** Self-hosted [ntfy](https://docs.ntfy.sh/install/) for privacy (public ntfy.sh works out of the box).
 - **Optional:** `mosh` on both ends for session roaming.
+
+## Further reading
+
+- [docs/internals.md](./docs/internals.md) — architecture, end-to-end flows
+  (clipboard paste, OAuth callback), and the reasoning behind ntfy / argv[0]
+  dispatch / topic-as-secret.
+- [docs/protocol.md](./docs/protocol.md) — wire envelope schema, log event
+  vocabulary, config precedence, ntfy endpoints.
 
 ## License
 
