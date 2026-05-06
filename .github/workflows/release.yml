@@ -15,12 +15,18 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   test:
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/master'
     uses: ./.github/workflows/test.yaml
 
   goreleaser:
     needs: test
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -30,12 +36,20 @@ jobs:
         if: github.event_name == 'workflow_dispatch'
         run: |
           set -euo pipefail
-          if [ "${GITHUB_REF}" != "refs/heads/master" ]; then
-            echo "workflow_dispatch must run from master (got ${GITHUB_REF})" >&2
-            exit 1
+          git fetch --tags --force
+          # If a previous run already pushed a release tag for HEAD (e.g. it
+          # failed in goreleaser and is being retried), reuse it instead of
+          # bumping again and orphaning the original.
+          existing=$(git tag --points-at HEAD --list 'v*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -n1 || true)
+          if [ -n "${existing}" ]; then
+            echo "Reusing existing tag ${existing} on HEAD"
+            exit 0
           fi
-          git fetch --tags
-          latest=$(git tag --list 'v*' --sort=-v:refname | head -n1)
+          latest=$(git tag --list 'v*' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -n1 || true)
           latest=${latest:-v0.0.0}
           IFS='.' read -r major minor patch <<< "${latest#v}"
           case "${{ inputs.bump }}" in
