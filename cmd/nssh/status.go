@@ -196,14 +196,6 @@ func truncate(s string, n int) string {
 	return s[:n-1] + "…"
 }
 
-func shortPath(p string) string {
-	home, _ := os.UserHomeDir()
-	if home != "" && strings.HasPrefix(p, home) {
-		return "~" + p[len(home):]
-	}
-	return p
-}
-
 func shortDuration(d time.Duration) string {
 	if d < time.Minute {
 		return strconv.Itoa(int(d.Seconds())) + "s"
@@ -280,66 +272,86 @@ func tailOne(path, label string, out chan<- string, stop <-chan struct{}) {
 }
 
 func formatEvent(raw, label string) string {
-	var m map[string]any
-	if err := json.Unmarshal([]byte(raw), &m); err != nil {
+	var e LogEvent
+	if err := json.Unmarshal([]byte(raw), &e); err != nil {
 		return fmt.Sprintf("[%s] %s", label, raw)
 	}
 	ts := ""
-	if v, ok := m["ts"].(string); ok {
-		if t, err := time.Parse(time.RFC3339Nano, v); err == nil {
-			ts = t.Local().Format("15:04:05")
-		}
+	if t, err := time.Parse(time.RFC3339Nano, e.TS); err == nil {
+		ts = t.Local().Format("15:04:05")
 	}
-	event, _ := m["event"].(string)
 
-	switch event {
+	switch e.Event {
 	case "msg-send":
-		return formatWireMessage(label, ts, "→", m)
+		return formatWireMessage(label, ts, "→", e)
 	case "msg-recv":
-		return formatWireMessage(label, ts, "←", m)
+		return formatWireMessage(label, ts, "←", e)
 	}
-
-	var keys []string
-	for k := range m {
-		switch k {
-		case "ts", "event", "pid", "side":
-			continue
-		}
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
 
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "[%s] %s %s", label, ts, event)
-	if side, _ := m["side"].(string); side != "" && side != "session" {
-		fmt.Fprintf(&sb, " (%s)", side)
+	fmt.Fprintf(&sb, "[%s] %s %s", label, ts, e.Event)
+	if e.Side != "" && e.Side != "session" {
+		fmt.Fprintf(&sb, " (%s)", e.Side)
 	}
-	for _, k := range keys {
-		fmt.Fprintf(&sb, " %s=%v", k, m[k])
+
+	// Per-event fields, alphabetical (matches the prior sorted-map order).
+	if e.Args != nil {
+		fmt.Fprintf(&sb, " args=%v", e.Args)
+	}
+	if e.Err != "" {
+		fmt.Fprintf(&sb, " err=%s", e.Err)
+	}
+	if e.Exit != nil {
+		fmt.Fprintf(&sb, " exit=%d", *e.Exit)
+	}
+	if e.ID != "" {
+		fmt.Fprintf(&sb, " id=%s", e.ID)
+	}
+	if e.Kind != "" {
+		fmt.Fprintf(&sb, " kind=%s", e.Kind)
+	}
+	if e.Mime != "" {
+		fmt.Fprintf(&sb, " mime=%s", e.Mime)
+	}
+	if e.Mosh != nil {
+		fmt.Fprintf(&sb, " mosh=%v", *e.Mosh)
+	}
+	if e.Persona != "" {
+		fmt.Fprintf(&sb, " persona=%s", e.Persona)
+	}
+	if e.Server != "" {
+		fmt.Fprintf(&sb, " server=%s", e.Server)
+	}
+	if e.Size > 0 {
+		fmt.Fprintf(&sb, " size=%d", e.Size)
+	}
+	if e.Target != "" {
+		fmt.Fprintf(&sb, " target=%s", e.Target)
+	}
+	if e.Topic != "" {
+		fmt.Fprintf(&sb, " topic=%s", e.Topic)
+	}
+	if e.URL != "" {
+		fmt.Fprintf(&sb, " url=%s", e.URL)
+	}
+	if e.Version != "" {
+		fmt.Fprintf(&sb, " version=%s", e.Version)
 	}
 	return sb.String()
 }
 
-func formatWireMessage(label, ts, arrow string, m map[string]any) string {
-	kind, _ := m["kind"].(string)
-	mime, _ := m["mime"].(string)
-	urlStr, _ := m["url"].(string)
-	var size int64
-	if v, ok := m["size"].(float64); ok {
-		size = int64(v)
-	}
-
+func formatWireMessage(label, ts, arrow string, e LogEvent) string {
 	var detail strings.Builder
 	switch {
-	case urlStr != "":
-		fmt.Fprintf(&detail, " %s", urlStr)
-	case mime != "":
-		fmt.Fprintf(&detail, " %s", mime)
+	case e.URL != "":
+		fmt.Fprintf(&detail, " %s", e.URL)
+	case e.Mime != "":
+		fmt.Fprintf(&detail, " %s", e.Mime)
 	}
-	if size > 0 {
-		fmt.Fprintf(&detail, " (%s)", humanSize(size))
+	if e.Size > 0 {
+		fmt.Fprintf(&detail, " (%s)", humanSize(int64(e.Size)))
 	}
-	return fmt.Sprintf("[%s] %s %s %s%s", label, ts, arrow, kind, detail.String())
+	return fmt.Sprintf("[%s] %s %s %s%s", label, ts, arrow, e.Kind, detail.String())
 }
 
 func humanSize(n int64) string {

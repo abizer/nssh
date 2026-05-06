@@ -15,8 +15,9 @@
             pname = "nssh";
             version = self.shortRev or self.dirtyShortRev or "dev";
             src = self;
-            vendorHash = null;
+            vendorHash = "sha256-bKX+nLOSmc1oZpT+Yg3XMuC+MBYwq0+vMeVKWUMD9fk=";
             subPackages = [ "cmd/nssh" ];
+            doCheck = true;
 
             meta = {
               description = "SSH/mosh wrapper with clipboard bridge and xdg-open forwarding via ntfy";

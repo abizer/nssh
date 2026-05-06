@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -11,11 +10,44 @@ import (
 	"github.com/abizer/nssh/v2/internal/wire"
 )
 
+// LogEvent is the on-disk schema for each JSONL log line. Both the writer
+// (logEvent below) and the reader (status.go::formatEvent) marshal against
+// this type, so renaming or adding a field is type-checked instead of
+// grep-and-pray. Exit and Mosh are pointers so callers can record an
+// explicit zero/false without omitempty dropping the field.
+type LogEvent struct {
+	TS    string `json:"ts"`
+	Event string `json:"event"`
+	Side  string `json:"side,omitempty"`
+	PID   int    `json:"pid,omitempty"`
+
+	// Wire-message details (msg-send / msg-recv).
+	Kind string `json:"kind,omitempty"`
+	Mime string `json:"mime,omitempty"`
+	ID   string `json:"id,omitempty"`
+	URL  string `json:"url,omitempty"`
+	Size int    `json:"size,omitempty"`
+
+	// Session lifecycle.
+	Target  string `json:"target,omitempty"`
+	Server  string `json:"server,omitempty"`
+	Topic   string `json:"topic,omitempty"`
+	Version string `json:"version,omitempty"`
+	Exit    *int   `json:"exit,omitempty"`
+	Mosh    *bool  `json:"mosh,omitempty"`
+
+	// Shim invocation.
+	Persona string   `json:"persona,omitempty"`
+	Args    []string `json:"args,omitempty"`
+
+	// Error context.
+	Err string `json:"err,omitempty"`
+}
+
 var (
-	logFile  *os.File
-	logMu    sync.Mutex
-	logTopic string
-	logSide  string // "session" (local) or persona name (remote shim)
+	logFile *os.File
+	logMu   sync.Mutex
+	logSide string // "session" (local) or persona name (remote shim)
 )
 
 // openLog opens the per-topic JSONL log file for appending. Silently no-ops
@@ -34,25 +66,21 @@ func openLog(topic, side string) {
 		return
 	}
 	logFile = f
-	logTopic = topic
 	logSide = side
 }
 
-// logEvent writes one JSONL line. Safe to call before openLog (no-op).
-// Line writes are atomic under POSIX O_APPEND for size < PIPE_BUF (~4KB),
-// so concurrent shim invocations on the same log don't interleave.
-func logEvent(event string, fields map[string]any) {
+// logEvent writes one JSONL line, stamping ts/side/pid. Safe to call before
+// openLog (no-op). Line writes are atomic under POSIX O_APPEND for size <
+// PIPE_BUF (~4KB), so concurrent shim invocations on the same log don't
+// interleave.
+func logEvent(e LogEvent) {
 	if logFile == nil {
 		return
 	}
-	if fields == nil {
-		fields = map[string]any{}
-	}
-	fields["ts"] = time.Now().UTC().Format(time.RFC3339Nano)
-	fields["event"] = event
-	fields["side"] = logSide
-	fields["pid"] = os.Getpid()
-	data, err := json.Marshal(fields)
+	e.TS = time.Now().UTC().Format(time.RFC3339Nano)
+	e.Side = logSide
+	e.PID = os.Getpid()
+	data, err := json.Marshal(e)
 	if err != nil {
 		return
 	}
@@ -61,34 +89,20 @@ func logEvent(event string, fields map[string]any) {
 	logFile.Write(append(data, '\n'))
 }
 
-// logErr logs an error event and also prints to stderr.
-func logErr(where string, err error) {
-	fmt.Fprintf(os.Stderr, "nssh: %s: %v\n", where, err)
-	logEvent("error", map[string]any{"where": where, "err": err.Error()})
-}
-
-// logMessage emits a msg-send or msg-recv event with a consistent schema so
-// both sides of the tunnel produce the same wire-event shape. "dir" is "in"
-// when the envelope arrived from the topic, "out" when we're publishing.
-// size is the payload size in bytes — attachment size for images, decoded
-// body length for inline text, 0 if unknown.
+// logMessage emits a msg-send (dir=="out") or msg-recv (otherwise) event
+// with the wire envelope details. size is the payload in bytes — attachment
+// size for images, decoded body length for inline text, 0 if unknown.
 func logMessage(dir string, env wire.Envelope, size int) {
 	event := "msg-recv"
 	if dir == "out" {
 		event = "msg-send"
 	}
-	fields := map[string]any{"kind": env.Kind}
-	if env.Mime != "" {
-		fields["mime"] = env.Mime
-	}
-	if env.ID != "" {
-		fields["id"] = env.ID
-	}
-	if env.URL != "" {
-		fields["url"] = env.URL
-	}
-	if size > 0 {
-		fields["size"] = size
-	}
-	logEvent(event, fields)
+	logEvent(LogEvent{
+		Event: event,
+		Kind:  env.Kind,
+		Mime:  env.Mime,
+		ID:    env.ID,
+		URL:   env.URL,
+		Size:  size,
+	})
 }

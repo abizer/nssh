@@ -3,6 +3,7 @@ package main
 import (
 	"archive/tar"
 	"compress/gzip"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"runtime"
 	"runtime/debug"
 	"strings"
+
+	"golang.org/x/mod/semver"
 )
 
 // personas are the argv[0] names nssh answers to when symlinked.
@@ -42,43 +45,24 @@ func latestReleaseTag() (string, error) {
 	if resp.StatusCode != 200 {
 		return "", fmt.Errorf("github api: %s", resp.Status)
 	}
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", err
+	var rel struct {
+		TagName string `json:"tag_name"`
 	}
-	const key = `"tag_name":"`
-	i := strings.Index(string(body), key)
-	if i < 0 {
+	if err := json.NewDecoder(resp.Body).Decode(&rel); err != nil {
+		return "", fmt.Errorf("github api: decode: %w", err)
+	}
+	if rel.TagName == "" {
 		return "", fmt.Errorf("no tag_name in github response")
 	}
-	rest := string(body[i+len(key):])
-	j := strings.Index(rest, `"`)
-	if j < 0 {
-		return "", fmt.Errorf("malformed tag_name")
-	}
-	return rest[:j], nil
+	return rel.TagName, nil
 }
 
-// looksLikeSemver reports whether v is a clean "vX.Y.Z" tag (no +dirty etc).
-func looksLikeSemver(v string) bool {
-	if !strings.HasPrefix(v, "v") || strings.ContainsAny(v, "+ ") {
-		return false
-	}
-	parts := strings.Split(v[1:], ".")
-	if len(parts) != 3 {
-		return false
-	}
-	for _, p := range parts {
-		if p == "" {
-			return false
-		}
-		for _, r := range p {
-			if r < '0' || r > '9' {
-				return false
-			}
-		}
-	}
-	return true
+// isReleaseVersion reports whether v is a clean release tag — valid semver
+// with no prerelease (-rc1) and no build metadata (+dirty). Used to gate
+// the version-mismatch nag at session start: dev builds shouldn't prompt
+// the user to overwrite the remote with an in-flight build.
+func isReleaseVersion(v string) bool {
+	return semver.IsValid(v) && semver.Prerelease(v) == "" && semver.Build(v) == ""
 }
 
 // detectLocalDesktop returns (true, reason) if a desktop session appears to be
@@ -110,9 +94,7 @@ ls /tmp/.X11-unix/ 2>/dev/null | head -1 | grep -q . && { ls /tmp/.X11-unix/ | h
 ls /run/user/*/wayland-* 2>/dev/null | head -1 | grep -q . && { ls /run/user/*/wayland-* | head -1; exit 0; }
 exit 1
 `
-	cmd := exec.Command("ssh", "-o", "BatchMode=yes", sshTarget, "bash -l -s")
-	cmd.Stdin = strings.NewReader(script)
-	out, err := cmd.Output()
+	out, err := runRemoteScript(sshTarget, script)
 	if err != nil {
 		// Exit 1 from our script = no desktop. ssh errors also end up here.
 		return false, ""
@@ -301,7 +283,7 @@ func infectRemote(sshTarget string, force bool) {
 	fmt.Fprintf(os.Stderr, "nssh: remote is %s/%s\n", goos, goarch)
 
 	tag := version()
-	if !looksLikeSemver(tag) {
+	if !isReleaseVersion(tag) {
 		t, err := latestReleaseTag()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "nssh: couldn't resolve release tag: %v\n", err)
@@ -318,7 +300,7 @@ func infectRemote(sshTarget string, force bool) {
 	}
 
 	fmt.Fprintf(os.Stderr, "nssh: copying to %s:~/.local/bin/nssh\n", sshTarget)
-	if err := exec.Command("ssh", sshTarget, "mkdir -p ~/.local/bin").Run(); err != nil {
+	if _, err := runRemoteScript(sshTarget, "mkdir -p ~/.local/bin\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: mkdir: %v\n", err)
 		os.Exit(1)
 	}
@@ -331,16 +313,15 @@ func infectRemote(sshTarget string, force bool) {
 
 	// Let the freshly-installed nssh infect the remote itself — this keeps
 	// the symlink list in one place (personas var here) and means nssh always
-	// owns its own symlinks.
-	cmd := exec.Command("ssh", sshTarget, "bash -l -c '~/.local/bin/nssh infect self --force'")
-	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
-	if err := cmd.Run(); err != nil {
+	// owns its own symlinks. infectSelf writes to stderr (which passes
+	// through), so we discard the captured stdout.
+	if _, err := runRemoteScript(sshTarget, "~/.local/bin/nssh infect self --force\n"); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: remote infect self: %v\n", err)
 		os.Exit(1)
 	}
 
 	// Sanity-check PATH ordering.
-	out, _ := exec.Command("ssh", sshTarget, `bash -l -c 'command -v xclip'`).Output()
+	out, _ := runRemoteScript(sshTarget, "command -v xclip\n")
 	resolved := strings.TrimSpace(string(out))
 	if !strings.Contains(resolved, ".local/bin/xclip") {
 		fmt.Fprintln(os.Stderr, "nssh: WARNING: ~/.local/bin/xclip is not first in PATH on the remote")
@@ -351,4 +332,35 @@ func infectRemote(sshTarget string, force bool) {
 	}
 
 	fmt.Fprintln(os.Stderr, "nssh: infection complete")
+}
+
+// infectCmd parses `nssh infect [--force] <host|self>` and dispatches to
+// infectSelf or infectRemote.
+func infectCmd(args []string) {
+	force := false
+	var target string
+	for _, a := range args {
+		switch a {
+		case "--force":
+			force = true
+		case "-h", "--help":
+			fmt.Fprintln(os.Stderr, "usage: nssh infect [--force] <host|self>")
+			os.Exit(1)
+		default:
+			if target != "" {
+				fmt.Fprintf(os.Stderr, "nssh: unexpected arg %q\n", a)
+				os.Exit(1)
+			}
+			target = a
+		}
+	}
+	if target == "" {
+		fmt.Fprintln(os.Stderr, "usage: nssh infect [--force] <host|self>")
+		os.Exit(1)
+	}
+	if target == "self" {
+		infectSelf(force)
+		return
+	}
+	infectRemote(target, force)
 }

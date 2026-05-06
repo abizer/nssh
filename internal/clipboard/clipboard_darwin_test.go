@@ -7,15 +7,11 @@ import (
 	"image/png"
 	"os"
 	"os/exec"
-	"runtime"
 	"testing"
 )
 
 func skip(t *testing.T) {
 	t.Helper()
-	if runtime.GOOS != "darwin" {
-		t.Skip("darwin-only")
-	}
 	if os.Getenv("NSSH_CLIPBOARD_TESTS") != "1" {
 		t.Skip("set NSSH_CLIPBOARD_TESTS=1 to run (will clobber your clipboard)")
 	}

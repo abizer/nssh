@@ -34,28 +34,14 @@ func shimClipWrite(topicURL, mime string) {
 		os.Exit(1)
 	}
 	if len(data) == 0 {
-		logEvent("clip-write-empty", map[string]any{"mime": mime})
+		logEvent(LogEvent{Event: "clip-write-empty", Mime: mime})
 		return
 	}
 
 	env := wire.Envelope{Kind: "clip-write", Mime: mime}
-	if len(data) <= inlineThreshold && !strings.HasPrefix(mime, "image/") {
-		env.Body = base64.StdEncoding.EncodeToString(data)
-		body, _ := json.Marshal(env)
-		if err := ntfy.PublishMessage(topicURL, string(body)); err != nil {
-			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
-			os.Exit(1)
-		}
-	} else {
-		msg, _ := json.Marshal(env)
-		filename := "clip.dat"
-		if strings.HasPrefix(mime, "image/png") {
-			filename = "clip.png"
-		}
-		if err := ntfy.PublishAttachment(topicURL, string(msg), data, filename); err != nil {
-			fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
-			os.Exit(1)
-		}
+	if err := wire.Publish(topicURL, env, data); err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: %v\n", err)
+		os.Exit(1)
 	}
 	logMessage("out", env, len(data))
 }
@@ -105,7 +91,7 @@ func shimClipRead(topicURL, mime string) {
 			}
 			if strings.HasPrefix(string(data), "ERROR: ") {
 				fmt.Fprintln(os.Stderr, string(data))
-				logEvent("clip-read-error", map[string]any{"id": id, "err": string(data)})
+				logEvent(LogEvent{Event: "clip-read-error", ID: id, Err: string(data)})
 				os.Exit(1)
 			}
 			logMessage("in", env, len(data))
@@ -122,12 +108,12 @@ func shimClipRead(topicURL, mime string) {
 			os.Stdout.Write(data)
 			return
 		}
-		logEvent("clip-read-empty", map[string]any{"id": id})
+		logEvent(LogEvent{Event: "clip-read-empty", ID: id})
 		return
 	}
 
 	fmt.Fprintln(os.Stderr, "nssh: clipboard read timed out")
-	logEvent("clip-read-timeout", map[string]any{"id": id})
+	logEvent(LogEvent{Event: "clip-read-timeout", ID: id})
 	os.Exit(1)
 }
 
@@ -159,7 +145,7 @@ func doXdgOpen(args []string) {
 		// this we silently exit 255 (system xdg-open's exit code on headless
 		// hosts), which gives no clue what went wrong (e.g. ntfy 429s).
 		fmt.Fprintf(os.Stderr, "nssh: publish failed: %v\n", err)
-		logEvent("publish-failed", map[string]any{"kind": "open", "err": err.Error()})
+		logEvent(LogEvent{Event: "publish-failed", Kind: "open", Err: err.Error()})
 		runFallback("xdg-open", args)
 	}
 	logMessage("out", env, 0)
@@ -256,7 +242,7 @@ func shimMain(persona string, args []string) {
 	cfg := loadConfig()
 	if cfg.Topic != "" {
 		openLog(cfg.Topic, persona)
-		logEvent("shim-start", map[string]any{"persona": persona, "args": args})
+		logEvent(LogEvent{Event: "shim-start", Persona: persona, Args: args})
 	}
 	switch persona {
 	case "xdg-open", "sensible-browser":
