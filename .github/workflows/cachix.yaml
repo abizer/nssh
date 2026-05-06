@@ -1,8 +1,14 @@
-name: cache
+name: cachix
 
 on:
   push:
-    branches: [main, master]
+    branches: [master]
+    paths:
+      - "cmd/nssh/**"
+      - "internal/**"
+      - ".github/workflows/cachix.yaml"
+      - "go.*"
+      - "flake.*"
   workflow_dispatch:
 
 jobs:
