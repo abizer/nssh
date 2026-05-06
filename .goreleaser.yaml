@@ -51,6 +51,7 @@ homebrew_casks:
       trash:
         - "~/.local/state/nssh"
         - "~/.config/nssh"
+        - "~/.cache/nssh"
 
 release:
   github:
