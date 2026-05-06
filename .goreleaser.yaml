@@ -49,8 +49,8 @@ homebrew_casks:
     # that trips Layout/EmptyLinesAroundBlockBody under `brew style`.
     zap:
       trash:
-        - "~/.local/state/nssh"
         - "~/.config/nssh"
+        - "~/.local/state/nssh"
 
 release:
   github:
