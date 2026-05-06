@@ -43,9 +43,14 @@ homebrew_casks:
     hooks:
       post:
         install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/nssh"]
-          end
+          system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/nssh"] if OS.mac?
+    # Populate the zap stanza so goreleaser's template doesn't emit a
+    # `# No zap stanza required` placeholder with a trailing blank line
+    # that trips Layout/EmptyLinesAroundBlockBody under `brew style`.
+    zap:
+      trash:
+        - "~/.local/state/nssh"
+        - "~/.config/nssh"
 
 release:
   github:
