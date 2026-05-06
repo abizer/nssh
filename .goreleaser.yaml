@@ -25,25 +25,27 @@ archives:
 checksum:
   name_template: "checksums.txt"
 
-brews:
+homebrew_casks:
   - name: nssh
     repository:
       owner: abizer
       name: homebrew-tap
       branch: master
       token: "{{ .Env.TAP_TOKEN }}"
-    directory: Formula
     homepage: "https://github.com/abizer/nssh"
     description: "Paste images into Claude Code over SSH"
-    license: "MIT"
     commit_author:
       name: github-actions[bot]
       email: github-actions[bot]@users.noreply.github.com
     commit_msg_template: "nssh {{ .Tag }}"
-    install: |
-      bin.install "nssh"
-    test: |
-      assert_match "usage: nssh", shell_output("#{bin}/nssh 2>&1", 1)
+    # Released binaries aren't notarized; strip the quarantine xattr on install
+    # so macOS doesn't refuse to launch them.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/nssh"]
+          end
 
 release:
   github:
