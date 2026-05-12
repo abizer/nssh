@@ -62,24 +62,37 @@ func readTOML(path string) map[string]string {
 	return m
 }
 
-// loadConfig resolves the ntfy server and topic from (in priority order):
-//  1. Environment variables (NSSH_NTFY_BASE)
-//  2. ~/.config/nssh/config.toml (server, topic) — persistent user config
-//  3. ~/.local/state/nssh/session (server, topic) — written by nssh at connect time
-//  4. Defaults: server=https://ntfy.sh, topic=<generated>
+// loadConfig resolves the ntfy server and topic for shim mode (xclip, xdg-open
+// etc. running on a remote shell). Priority (highest first):
+//  1. NSSH_NTFY_BASE env var (server only)
+//  2. ~/.config/nssh/config.toml — persistent user config
+//  3. ~/.local/state/nssh/session — written by `nssh <host>` at connect time
+//  4. Defaults: server=https://ntfy.sh
 func loadConfig() nsshConfig {
+	return resolveConfig(true)
+}
+
+// loadSessionConfig is loadConfig minus the remote-style session file. Used by
+// `nssh <host>` on the local Mac, where the session file is a remote
+// convention; reading it locally would mean every new local nssh inherits the
+// topic of the last remote shell that was prepared, defeating per-host reuse.
+func loadSessionConfig() nsshConfig {
+	return resolveConfig(false)
+}
+
+func resolveConfig(includeSessionFile bool) nsshConfig {
 	cfg := nsshConfig{Server: defaultServer}
 
-	// Session file (written by nssh session mode at connect time).
-	session := readTOML(filepath.Join(stateDir(), "session"))
-	if session["server"] != "" {
-		cfg.Server = session["server"]
-	}
-	if session["topic"] != "" {
-		cfg.Topic = session["topic"]
+	if includeSessionFile {
+		session := readTOML(filepath.Join(stateDir(), "session"))
+		if session["server"] != "" {
+			cfg.Server = session["server"]
+		}
+		if session["topic"] != "" {
+			cfg.Topic = session["topic"]
+		}
 	}
 
-	// Permanent config overrides session.
 	config := readTOML(filepath.Join(configDir(), "config.toml"))
 	if config["server"] != "" {
 		cfg.Server = config["server"]
@@ -88,7 +101,6 @@ func loadConfig() nsshConfig {
 		cfg.Topic = config["topic"]
 	}
 
-	// Env var overrides everything for server.
 	if v := os.Getenv("NSSH_NTFY_BASE"); v != "" {
 		cfg.Server = v
 	}

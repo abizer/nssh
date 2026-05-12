@@ -47,6 +47,8 @@ on ntfy.sh and unlimited on self-hosted.
 | `clip-write` | remote → local | `mime`, payload | Write data to the macOS clipboard. Empty payload (`Body == ""` and no attachment) is dropped with a stderr message. |
 | `clip-read-request` | remote → local | `id`, `mime` | Ask the local side to read its clipboard. The shim subscribes to the topic with `?since=<now>` for 5s, waiting for a matching response. |
 | `clip-read-response` | local → remote | `id`, `mime`, payload | Response to `clip-read-request`. The shim filters by `id` so concurrent reads don't cross paths. Body prefixed with `ERROR: ` indicates failure (e.g. clipboard tools missing). |
+| `ping` | local ↔ local | `id` | Liveness probe between two nssh processes sharing a topic. The peer replies with a `pong` carrying the same `id`. |
+| `pong` | local ↔ local | `id` | Ack for `ping`. Senders correlate by `id` so concurrent pings don't cross paths. |
 
 ### MIME conventions
 
@@ -85,15 +87,22 @@ type LogEvent struct {
 
     // Session lifecycle.
     Target  string `json:"target,omitempty"`
+    Host    string `json:"host,omitempty"`
     Server  string `json:"server,omitempty"`
     Topic   string `json:"topic,omitempty"`
     Version string `json:"version,omitempty"`
     Exit    *int   `json:"exit,omitempty"`
     Mosh    *bool  `json:"mosh,omitempty"`
+    Joined  int    `json:"joined,omitempty"`
 
     // Shim invocation.
     Persona string   `json:"persona,omitempty"`
     Args    []string `json:"args,omitempty"`
+
+    // Subscriber resilience (subscribe-up / subscribe-down).
+    Reconnect bool   `json:"reconnect,omitempty"`
+    Gap       string `json:"gap,omitempty"`
+    Since     string `json:"since,omitempty"`
 
     // Error context.
     Err string `json:"err,omitempty"`
@@ -105,8 +114,10 @@ type LogEvent struct {
 | Event | Emitted by | Fields | Meaning |
 |-------|------------|--------|---------|
 | `session-open` | local (during `prepareRemote`, written to remote log via SSH heredoc) | `server`, `topic`, `target`, `version` | Local nssh announces itself to the remote at session start. Side is `session-init`. |
-| `session-start` | local | `target`, `server` | Local subscriber is starting. |
+| `session-start` | local | `target`, `host`, `server`, `joined` | Local subscriber is starting. `joined` is the PID of the existing nssh whose topic we adopted, omitted on a fresh connect. |
 | `session-end` | local | `exit`, `mosh` | Local interactive session ended. `exit` is `0` on success; `mosh` records which transport was used. |
+| `subscribe-up` | local | `reconnect`, `gap`, `since` | ntfy `/json` long-poll connected. `reconnect=true` plus `gap` is set after a prior `subscribe-down`; `since` echoes the ntfy message id resumed from. |
+| `subscribe-down` | local | `err` | ntfy `/json` long-poll dropped (network, timeout, EOF). Followed by a reconnect attempt. |
 | `msg-send` | either | `kind`, `mime`, `id`, `url`, `size` | Envelope published to the topic. |
 | `msg-recv` | either | `kind`, `mime`, `id`, `url`, `size` | Envelope received from the topic. |
 | `msg-unknown` | either | `size` | Topic message that didn't parse as a valid envelope. |

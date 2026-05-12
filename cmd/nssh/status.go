@@ -20,6 +20,7 @@ import (
 type sessionInfo struct {
 	PID     int       `json:"pid"`
 	Target  string    `json:"target"`
+	Host    string    `json:"host"` // canonical short host from `ssh -G`; key for session reuse
 	Topic   string    `json:"topic"`
 	Server  string    `json:"server"`
 	Started time.Time `json:"started"`
@@ -34,7 +35,7 @@ func sessionsDir() string {
 // registerSession writes a pidfile describing the current session. Called once
 // by nsshMain just before the subscriber starts. Returns the file path so the
 // caller can unregister explicitly (defers don't fire under os.Exit).
-func registerSession(cfg nsshConfig, target string) (string, error) {
+func registerSession(cfg nsshConfig, target, host string) (string, error) {
 	dir := sessionsDir()
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
@@ -43,6 +44,7 @@ func registerSession(cfg nsshConfig, target string) (string, error) {
 	info := sessionInfo{
 		PID:     os.Getpid(),
 		Target:  target,
+		Host:    host,
 		Topic:   cfg.Topic,
 		Server:  cfg.Server,
 		Started: time.Now().UTC(),
@@ -60,6 +62,24 @@ func unregisterSession(path string) {
 		return
 	}
 	_ = os.Remove(path)
+}
+
+// findActiveSessionForHost returns the oldest live session targeting the given
+// canonical short host, or nil if there isn't one. Used to share a single ntfy
+// topic across all nssh processes connected to the same host — otherwise a
+// drive-by `nssh <host>` would generate a new topic, overwrite the remote's
+// session file, and orphan the long-running subscriber.
+func findActiveSessionForHost(host string) *sessionInfo {
+	if host == "" {
+		return nil
+	}
+	for _, s := range activeSessions() {
+		if s.Host == host {
+			s := s
+			return &s
+		}
+	}
+	return nil
 }
 
 // activeSessions scans the sessions dir, GCs entries whose PID is no longer
@@ -304,8 +324,17 @@ func formatEvent(raw, label string) string {
 	if e.Exit != nil {
 		fmt.Fprintf(&sb, " exit=%d", *e.Exit)
 	}
+	if e.Gap != "" {
+		fmt.Fprintf(&sb, " gap=%s", e.Gap)
+	}
+	if e.Host != "" {
+		fmt.Fprintf(&sb, " host=%s", e.Host)
+	}
 	if e.ID != "" {
 		fmt.Fprintf(&sb, " id=%s", e.ID)
+	}
+	if e.Joined != 0 {
+		fmt.Fprintf(&sb, " joined=%d", e.Joined)
 	}
 	if e.Kind != "" {
 		fmt.Fprintf(&sb, " kind=%s", e.Kind)
@@ -319,8 +348,14 @@ func formatEvent(raw, label string) string {
 	if e.Persona != "" {
 		fmt.Fprintf(&sb, " persona=%s", e.Persona)
 	}
+	if e.Reconnect {
+		fmt.Fprintf(&sb, " reconnect=%v", e.Reconnect)
+	}
 	if e.Server != "" {
 		fmt.Fprintf(&sb, " server=%s", e.Server)
+	}
+	if e.Since != "" {
+		fmt.Fprintf(&sb, " since=%s", e.Since)
 	}
 	if e.Size > 0 {
 		fmt.Fprintf(&sb, " size=%d", e.Size)
