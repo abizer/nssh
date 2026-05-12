@@ -11,6 +11,8 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -29,6 +31,7 @@ func nsshMain() {
 	args := os.Args[1:]
 	forceSSH := false
 	forceMosh := false
+	collisionFlag := "" // "join" | "replace" | "new" | ""
 	for len(args) > 0 {
 		switch args[0] {
 		case "--ssh":
@@ -37,6 +40,18 @@ func nsshMain() {
 			continue
 		case "--mosh":
 			forceMosh = true
+			args = args[1:]
+			continue
+		case "--join":
+			collisionFlag = "join"
+			args = args[1:]
+			continue
+		case "--replace":
+			collisionFlag = "replace"
+			args = args[1:]
+			continue
+		case "--new":
+			collisionFlag = "new"
 			args = args[1:]
 			continue
 		case "-h", "--help":
@@ -65,19 +80,34 @@ func nsshMain() {
 	}
 
 	cfg := loadSessionConfig()
+	joinedPID := 0
 	if cfg.Topic == "" {
-		if existing := findActiveSessionForHost(shortHost); existing != nil {
+		existing := findActiveSessionForHost(shortHost)
+		switch resolveSessionCollision(existing, collisionFlag) {
+		case "join":
 			cfg.Topic = existing.Topic
 			cfg.Server = existing.Server
+			joinedPID = existing.PID
 			fmt.Fprintf(os.Stderr, "nssh: joining active session for %s (PID %d)\n", shortHost, existing.PID)
-		} else {
+		case "replace":
+			fmt.Fprintf(os.Stderr, "nssh: replacing existing session for %s (PID %d)\n", shortHost, existing.PID)
+			replaceSession(existing)
+			cfg.Topic = generateTopic()
+		case "new":
+			if existing != nil {
+				fmt.Fprintf(os.Stderr, "nssh: starting on a fresh topic; existing PID %d will be left on the old one\n", existing.PID)
+			}
 			cfg.Topic = generateTopic()
 		}
 	}
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
 
 	openLog(cfg.Topic, "session")
-	logEvent(LogEvent{Event: "session-start", Target: sshTarget, Host: shortHost, Server: cfg.Server})
+	startEvent := LogEvent{Event: "session-start", Target: sshTarget, Host: shortHost, Server: cfg.Server}
+	if joinedPID != 0 {
+		startEvent.Joined = joinedPID
+	}
+	logEvent(startEvent)
 
 	sessionFile, err := registerSession(cfg, sshTarget, shortHost)
 	if err != nil {
@@ -85,20 +115,24 @@ func nsshMain() {
 	}
 	defer unregisterSession(sessionFile)
 
-	// One SSH login-shell to probe version, write the session file, and seed
-	// the remote JSONL log before the interactive session starts.
-	remoteVer := prepareRemote(sshTarget, cfg)
-	if localVer := version(); isReleaseVersion(localVer) {
-		switch {
-		case remoteVer == "":
-			fmt.Fprintln(os.Stderr, "nssh: not installed on remote — clipboard bridge will not work")
-			if promptYes("  install it now?") {
-				infectRemote(sshTarget, false)
-			}
-		case semver.Compare(remoteVer, localVer) != 0:
-			fmt.Fprintf(os.Stderr, "nssh: remote version %s, local %s\n", remoteVer, localVer)
-			if promptYes("  update remote to " + localVer + "?") {
-				infectRemote(sshTarget, false)
+	// First nssh for this host: probe version, write the remote session file,
+	// and seed the remote JSONL log. When joining, the original process
+	// already did this and the remote state is still correct — skip the extra
+	// SSH and the version prompt the user has already seen.
+	if joinedPID == 0 {
+		remoteVer := prepareRemote(sshTarget, cfg)
+		if localVer := version(); isReleaseVersion(localVer) {
+			switch {
+			case remoteVer == "":
+				fmt.Fprintln(os.Stderr, "nssh: not installed on remote — clipboard bridge will not work")
+				if promptYes("  install it now?") {
+					infectRemote(sshTarget, false)
+				}
+			case semver.Compare(remoteVer, localVer) != 0:
+				fmt.Fprintf(os.Stderr, "nssh: remote version %s, local %s\n", remoteVer, localVer)
+				if promptYes("  update remote to " + localVer + "?") {
+					infectRemote(sshTarget, false)
+				}
 			}
 		}
 	}
@@ -122,6 +156,93 @@ func nsshMain() {
 	if exitCode != 0 {
 		os.Exit(exitCode)
 	}
+}
+
+// resolveSessionCollision picks how this nssh should relate to any existing
+// nssh attached to the same host. Inputs:
+//   - existing: nil if no live session for this host (just generate a topic)
+//   - flag: one of "" (decide automatically) / "join" / "replace" / "new"
+//
+// When unforced, we ping the existing topic to test whether the peer is
+// responsive; an unresponsive peer makes "replace" the prompt default since
+// joining a wedged subscriber is almost never what the user wants.
+func resolveSessionCollision(existing *sessionInfo, flag string) string {
+	if existing == nil {
+		return "new"
+	}
+	switch flag {
+	case "join", "replace", "new":
+		return flag
+	}
+
+	alive := pingTopic(existing.Server, existing.Topic, 1500*time.Millisecond)
+	age := time.Since(existing.Started).Round(time.Second)
+	fmt.Fprintf(os.Stderr, "nssh: existing session on %s (PID %d, started %s ago, alive=%v)\n",
+		existing.Host, existing.PID, age, alive)
+
+	stat, err := os.Stdin.Stat()
+	interactive := err == nil && stat.Mode()&os.ModeCharDevice != 0
+	if !interactive {
+		// In a script — joining is the least surprising default. Warn if the
+		// peer didn't answer so the operator sees something is wrong.
+		if !alive {
+			fmt.Fprintln(os.Stderr, "nssh: peer did not respond to ping; joining anyway (pass --replace or --new to override)")
+		}
+		return "join"
+	}
+
+	defaultChoice := "join"
+	prompt := "  [J]oin / [R]eplace (kill PID) / [N]ew topic / [C]ancel? [J] "
+	if !alive {
+		defaultChoice = "replace"
+		prompt = "  [R]eplace (kill PID) / [N]ew topic / [J]oin anyway / [C]ancel? [R] "
+	}
+	fmt.Fprint(os.Stderr, prompt)
+	var resp string
+	fmt.Scanln(&resp)
+	switch strings.ToLower(strings.TrimSpace(resp)) {
+	case "j", "join":
+		return "join"
+	case "r", "replace":
+		return "replace"
+	case "n", "new":
+		return "new"
+	case "c", "cancel", "q", "quit":
+		fmt.Fprintln(os.Stderr, "nssh: cancelled")
+		os.Exit(0)
+	case "":
+		return defaultChoice
+	}
+	fmt.Fprintf(os.Stderr, "nssh: unrecognized choice %q, using default (%s)\n", resp, defaultChoice)
+	return defaultChoice
+}
+
+// replaceSession terminates the existing nssh process and removes its pidfile.
+// Sends SIGTERM first (lets defers run on the old process — unregister, logs);
+// escalates to SIGKILL if it's still alive after 1s. Best-effort: missing
+// pidfile or already-dead process is not an error.
+func replaceSession(s *sessionInfo) {
+	if s == nil || s.PID <= 0 {
+		return
+	}
+	if err := syscall.Kill(s.PID, syscall.SIGTERM); err != nil {
+		// Process already gone — just clean up the pidfile.
+		_ = os.Remove(filepath.Join(sessionsDir(), fmt.Sprintf("%d.json", s.PID)))
+		return
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if syscall.Kill(s.PID, 0) != nil {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if syscall.Kill(s.PID, 0) == nil {
+		// Still alive — escalate. SIGKILL won't run the other process's
+		// defers, so we have to remove its pidfile ourselves.
+		_ = syscall.Kill(s.PID, syscall.SIGKILL)
+	}
+	_ = os.Remove(filepath.Join(sessionsDir(), fmt.Sprintf("%d.json", s.PID)))
 }
 
 // runSession execs the interactive ssh/mosh subprocess, wires its stdio to
@@ -221,11 +342,24 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 		},
 	}
 
+	var (
+		lastID     string    // most recent ntfy message id we processed
+		downAt     time.Time // when the previous connection dropped, zero on cold start
+		downLogged bool      // whether we've already logged subscribe-down for the current outage
+	)
+
 	for {
 		if ctx.Err() != nil {
 			return
 		}
-		req, err := http.NewRequestWithContext(ctx, "GET", endpoint, nil)
+		url := endpoint
+		if lastID != "" {
+			// ntfy's ?since=<id> is exclusive: we get back messages strictly
+			// newer than lastID. Without this, anything posted while we were
+			// asleep or disconnected is dropped on the floor.
+			url += "?since=" + lastID
+		}
+		req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
 		if err != nil {
 			return
 		}
@@ -235,6 +369,11 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "nssh: ntfy: %v — retrying\n", err)
+			if !downLogged {
+				logEvent(LogEvent{Event: "subscribe-down", Err: err.Error()})
+				downAt = time.Now()
+				downLogged = true
+			}
 			select {
 			case <-ctx.Done():
 				return
@@ -243,6 +382,17 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 			continue
 		}
 
+		upEvent := LogEvent{Event: "subscribe-up"}
+		if !downAt.IsZero() {
+			upEvent.Reconnect = true
+			upEvent.Gap = time.Since(downAt).Round(time.Second).String()
+		}
+		if lastID != "" {
+			upEvent.Since = lastID
+		}
+		logEvent(upEvent)
+		downLogged = false
+
 		scanner := bufio.NewScanner(resp.Body)
 		for scanner.Scan() {
 			var msg ntfy.Msg
@@ -250,11 +400,23 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 				continue
 			}
 			if msg.Event == "message" && msg.Message != "" {
+				if msg.ID != "" {
+					lastID = msg.ID
+				}
 				go handleMessage(msg, topicURL, sshTarget)
 			}
 		}
-		if err := scanner.Err(); err != nil && ctx.Err() == nil {
-			fmt.Fprintf(os.Stderr, "nssh: ntfy stream ended (%v) — reconnecting\n", err)
+		reason := "eof"
+		if err := scanner.Err(); err != nil {
+			reason = err.Error()
+			if ctx.Err() == nil {
+				fmt.Fprintf(os.Stderr, "nssh: ntfy stream ended (%v) — reconnecting\n", err)
+			}
+		}
+		if ctx.Err() == nil {
+			logEvent(LogEvent{Event: "subscribe-down", Err: reason})
+			downAt = time.Now()
+			downLogged = true
 		}
 		resp.Body.Close()
 
@@ -305,7 +467,75 @@ func handleMessage(msg ntfy.Msg, topicURL, sshTarget string) {
 		handleClipReadRequest(env, topicURL)
 	case "clip-read-response":
 		// Responses are for the remote shim, not us. Ignore.
+	case "ping":
+		handlePing(env, topicURL)
+	case "pong":
+		// Pongs are for whoever issued the matching ping. Ignore here.
 	default:
 		fmt.Fprintf(os.Stderr, "nssh: unknown envelope kind %q\n", env.Kind)
 	}
+}
+
+// handlePing publishes a pong with the same correlation id. Used by a peer
+// nssh process to verify this subscriber is alive (not just kill -0 alive).
+func handlePing(env wire.Envelope, topicURL string) {
+	resp := wire.Envelope{Kind: "pong", ID: env.ID}
+	if err := wire.Publish(topicURL, resp, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "nssh: pong: %v\n", err)
+		return
+	}
+	logMessage("out", resp, 0)
+}
+
+// pingTopic publishes a ping envelope to the topic and waits up to `timeout`
+// for a pong with the matching correlation id. Returns true if any peer on
+// the topic acked the ping. Used at session-start to decide whether an
+// existing pidfile points at a live, responsive nssh or a wedged one.
+//
+// We open the subscriber *before* publishing so we don't race the pong:
+// ntfy's "messages I have not seen yet" view starts at connect time.
+func pingTopic(server, topic string, timeout time.Duration) bool {
+	topicURL := strings.TrimRight(server, "/") + "/" + topic
+	corrID := generateTopic() // reuse: just need an unguessable random string
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", topicURL+"/json", nil)
+	if err != nil {
+		return false
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return false
+	}
+	defer resp.Body.Close()
+
+	// Publish ping *after* the subscriber is connected — otherwise the pong
+	// can race ahead of us and we'd never see it.
+	go func() {
+		_ = wire.Publish(topicURL, wire.Envelope{Kind: "ping", ID: corrID}, nil)
+	}()
+
+	scanner := bufio.NewScanner(resp.Body)
+	for scanner.Scan() {
+		if ctx.Err() != nil {
+			return false
+		}
+		var msg ntfy.Msg
+		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		if msg.Event != "message" {
+			continue
+		}
+		env, ok := wire.Parse(msg.Message)
+		if !ok {
+			continue
+		}
+		if env.Kind == "pong" && env.ID == corrID {
+			return true
+		}
+	}
+	return false
 }

@@ -16,7 +16,13 @@ type Attachment struct {
 }
 
 // Msg is a single message from the ntfy JSON stream.
+//
+// ID is ntfy's per-message identifier; pass it back as ?since=<id> on
+// reconnect to replay anything published while we were offline. Time is
+// the unix seconds the server timestamped the message.
 type Msg struct {
+	ID         string      `json:"id"`
+	Time       int64       `json:"time,omitempty"`
 	Event      string      `json:"event"`
 	Message    string      `json:"message"`
 	Attachment *Attachment `json:"attachment,omitempty"`

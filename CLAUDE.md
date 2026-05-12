@@ -41,6 +41,12 @@ to `infect self`. `infect self` creates symlinks in `~/.local/bin`
 pointing at the running nssh binary (darwin: no-op; desktop linux:
 refuses without --force to avoid shadowing real xclip/xdg-open).
 
+`nssh sweep <host>` lists `mosh-server` processes owned by $USER on
+the remote and offers to kill them. Safe when running tmux-inside-mosh:
+killing mosh-server doesn't kill the tmux server, so detached sessions
+survive. Use `--all` for unattended cleanup or `--older 168h` to keep
+only the last week.
+
 ## Architecture
 
 ### Dispatch on argv[0]
@@ -82,6 +88,8 @@ JSON envelopes on the ntfy topic. Every message has a `kind` field:
 | `clip-write` | remote → local | Write data to the Mac clipboard |
 | `clip-read-request` | remote → local | Request the Mac clipboard contents |
 | `clip-read-response` | local → remote | Response with clipboard data |
+| `ping` | local ↔ local | Liveness probe between two nssh processes sharing a topic |
+| `pong` | local ↔ local | Ack for `ping`, echoing the same correlation id |
 
 Small text (≤3KB) is base64-encoded inline in the `body` field. Larger payloads
 and images are sent as ntfy attachments (PUT with `Filename` + `X-Message` headers).
@@ -92,6 +100,24 @@ Each connection gets a random topic (`nssh_<random>`) by default — unguessable
 no config required. nssh writes the server + topic to `~/.local/state/nssh/session`
 on the remote before launching the shell (and seeds a `session-open` event into
 the JSONL log). The shim reads this file.
+
+### Session collisions
+
+A pidfile per live local nssh is kept at `~/.local/state/nssh/sessions/<pid>.json`.
+On startup, nssh looks up the host (canonical short name from `ssh -G`) in that
+registry. When an existing session is found nssh sends a `ping` on the topic and
+waits ~1.5s for a `pong`, then prompts (in an interactive shell) for one of:
+
+| Choice | Effect |
+|--------|--------|
+| join | adopt the existing topic; both subscribers see every message |
+| replace | SIGTERM the existing PID, then SIGKILL after 1s if it's still up; fresh topic |
+| new | fresh topic; existing PID is left running but the remote bridge will follow the new topic |
+
+Default in the prompt is `join` if the peer answered the ping, `replace` if it
+didn't. Non-interactive shells silently join (with a warning on the stderr if the
+peer was unresponsive). Override with `--join` / `--replace` / `--new` on the
+command line.
 
 Optional `~/.config/nssh/config.toml` on either side to pin values:
 ```toml

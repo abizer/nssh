@@ -42,6 +42,11 @@ type LogEvent struct {
 	Persona string   `json:"persona,omitempty"`
 	Args    []string `json:"args,omitempty"`
 
+	// Subscriber resilience (subscribe-up / subscribe-down).
+	Reconnect bool   `json:"reconnect,omitempty"`
+	Gap       string `json:"gap,omitempty"`
+	Since     string `json:"since,omitempty"`
+
 	// Error context.
 	Err string `json:"err,omitempty"`
 }
