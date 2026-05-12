@@ -85,11 +85,19 @@ func nsshMain() {
 		existing := findActiveSessionForHost(shortHost)
 		switch resolveSessionCollision(existing, collisionFlag) {
 		case "join":
+			if existing == nil {
+				cfg.Topic = generateTopic()
+				break
+			}
 			cfg.Topic = existing.Topic
 			cfg.Server = existing.Server
 			joinedPID = existing.PID
 			fmt.Fprintf(os.Stderr, "nssh: joining active session for %s (PID %d)\n", shortHost, existing.PID)
 		case "replace":
+			if existing == nil {
+				cfg.Topic = generateTopic()
+				break
+			}
 			fmt.Fprintf(os.Stderr, "nssh: replacing existing session for %s (PID %d)\n", shortHost, existing.PID)
 			replaceSession(existing)
 			cfg.Topic = generateTopic()
