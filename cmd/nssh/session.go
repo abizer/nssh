@@ -32,32 +32,21 @@ func nsshMain() {
 	forceSSH := false
 	forceMosh := false
 	collisionFlag := "" // "join" | "replace" | "new" | ""
+parse:
 	for len(args) > 0 {
 		switch args[0] {
 		case "--ssh":
 			forceSSH = true
-			args = args[1:]
-			continue
 		case "--mosh":
 			forceMosh = true
-			args = args[1:]
-			continue
-		case "--join":
-			collisionFlag = "join"
-			args = args[1:]
-			continue
-		case "--replace":
-			collisionFlag = "replace"
-			args = args[1:]
-			continue
-		case "--new":
-			collisionFlag = "new"
-			args = args[1:]
-			continue
+		case "--join", "--replace", "--new":
+			collisionFlag = strings.TrimPrefix(args[0], "--")
 		case "-h", "--help":
 			usage()
+		default:
+			break parse
 		}
-		break
+		args = args[1:]
 	}
 	if forceSSH && forceMosh {
 		fmt.Fprintln(os.Stderr, "nssh: --ssh and --mosh are mutually exclusive")
@@ -83,26 +72,19 @@ func nsshMain() {
 	joinedPID := 0
 	if cfg.Topic == "" {
 		existing := findActiveSessionForHost(shortHost)
-		switch resolveSessionCollision(existing, collisionFlag) {
-		case "join":
-			if existing == nil {
-				cfg.Topic = generateTopic()
-				break
-			}
+		choice := resolveSessionCollision(existing, collisionFlag)
+		switch {
+		case existing != nil && choice == "join":
 			cfg.Topic = existing.Topic
 			cfg.Server = existing.Server
 			joinedPID = existing.PID
 			fmt.Fprintf(os.Stderr, "nssh: joining active session for %s (PID %d)\n", shortHost, existing.PID)
-		case "replace":
-			if existing == nil {
-				cfg.Topic = generateTopic()
-				break
-			}
+		case existing != nil && choice == "replace":
 			fmt.Fprintf(os.Stderr, "nssh: replacing existing session for %s (PID %d)\n", shortHost, existing.PID)
 			replaceSession(existing)
 			cfg.Topic = generateTopic()
-		case "new":
-			if existing != nil {
+		default:
+			if existing != nil && choice == "new" {
 				fmt.Fprintf(os.Stderr, "nssh: starting on a fresh topic; existing PID %d will be left on the old one\n", existing.PID)
 			}
 			cfg.Topic = generateTopic()
@@ -111,11 +93,13 @@ func nsshMain() {
 	fmt.Fprintf(os.Stderr, "nssh: subscribing to %s\n", cfg.topicURL())
 
 	openLog(cfg.Topic, "session")
-	startEvent := LogEvent{Event: "session-start", Target: sshTarget, Host: shortHost, Server: cfg.Server}
-	if joinedPID != 0 {
-		startEvent.Joined = joinedPID
-	}
-	logEvent(startEvent)
+	logEvent(LogEvent{
+		Event:  "session-start",
+		Target: sshTarget,
+		Host:   shortHost,
+		Server: cfg.Server,
+		Joined: joinedPID, // omitempty drops 0
+	})
 
 	sessionFile, err := registerSession(cfg, sshTarget, shortHost)
 	if err != nil {
@@ -233,24 +217,22 @@ func replaceSession(s *sessionInfo) {
 	if s == nil || s.PID <= 0 {
 		return
 	}
+	pidfile := filepath.Join(sessionsDir(), fmt.Sprintf("%d.json", s.PID))
+	defer os.Remove(pidfile)
+
 	if err := syscall.Kill(s.PID, syscall.SIGTERM); err != nil {
-		// Process already gone — just clean up the pidfile.
-		_ = os.Remove(filepath.Join(sessionsDir(), fmt.Sprintf("%d.json", s.PID)))
-		return
+		return // process already gone
 	}
 	deadline := time.Now().Add(time.Second)
 	for time.Now().Before(deadline) {
 		if syscall.Kill(s.PID, 0) != nil {
-			break
+			return
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
-	if syscall.Kill(s.PID, 0) == nil {
-		// Still alive — escalate. SIGKILL won't run the other process's
-		// defers, so we have to remove its pidfile ourselves.
-		_ = syscall.Kill(s.PID, syscall.SIGKILL)
-	}
-	_ = os.Remove(filepath.Join(sessionsDir(), fmt.Sprintf("%d.json", s.PID)))
+	// Still alive — escalate. SIGKILL won't run the other process's defers,
+	// so we leave pidfile cleanup to our deferred os.Remove above.
+	_ = syscall.Kill(s.PID, syscall.SIGKILL)
 }
 
 // runSession execs the interactive ssh/mosh subprocess, wires its stdio to
@@ -353,8 +335,19 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 	var (
 		lastID     string    // most recent ntfy message id we processed
 		downAt     time.Time // when the previous connection dropped, zero on cold start
-		downLogged bool      // whether we've already logged subscribe-down for the current outage
+		downLogged bool      // already logged subscribe-down for the current outage
 	)
+	// markDown is idempotent for the current outage: connect-failure and
+	// stream-end paths both invoke it, but only the first call records the
+	// timestamp + log line. Cleared on every successful subscribe-up.
+	markDown := func(reason string) {
+		if downLogged || ctx.Err() != nil {
+			return
+		}
+		logEvent(LogEvent{Event: "subscribe-down", Err: reason})
+		downAt = time.Now()
+		downLogged = true
+	}
 
 	for {
 		if ctx.Err() != nil {
@@ -377,11 +370,7 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 				return
 			}
 			fmt.Fprintf(os.Stderr, "nssh: ntfy: %v — retrying\n", err)
-			if !downLogged {
-				logEvent(LogEvent{Event: "subscribe-down", Err: err.Error()})
-				downAt = time.Now()
-				downLogged = true
-			}
+			markDown(err.Error())
 			select {
 			case <-ctx.Done():
 				return
@@ -421,11 +410,7 @@ func subscribeNtfy(ctx context.Context, cfg nsshConfig, sshTarget string) {
 				fmt.Fprintf(os.Stderr, "nssh: ntfy stream ended (%v) — reconnecting\n", err)
 			}
 		}
-		if ctx.Err() == nil {
-			logEvent(LogEvent{Event: "subscribe-down", Err: reason})
-			downAt = time.Now()
-			downLogged = true
-		}
+		markDown(reason)
 		resp.Body.Close()
 
 		select {

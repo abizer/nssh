@@ -39,27 +39,19 @@ func sweepCmd(args []string) {
 
 	for i := 0; i < len(args); i++ {
 		a := args[i]
+		var durStr string
 		switch {
 		case a == "--all":
 			all = true
+			continue
 		case a == "--older":
 			i++
 			if i >= len(args) {
 				sweepUsage()
 			}
-			d, err := time.ParseDuration(args[i])
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "nssh: invalid duration %q: %v\n", args[i], err)
-				os.Exit(1)
-			}
-			olderThan = d
+			durStr = args[i]
 		case strings.HasPrefix(a, "--older="):
-			d, err := time.ParseDuration(strings.TrimPrefix(a, "--older="))
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "nssh: invalid duration %q: %v\n", a, err)
-				os.Exit(1)
-			}
-			olderThan = d
+			durStr = strings.TrimPrefix(a, "--older=")
 		case a == "-h", a == "--help":
 			sweepUsage()
 		default:
@@ -68,7 +60,14 @@ func sweepCmd(args []string) {
 				os.Exit(1)
 			}
 			target = a
+			continue
 		}
+		d, err := time.ParseDuration(durStr)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "nssh: invalid duration %q: %v\n", durStr, err)
+			os.Exit(1)
+		}
+		olderThan = d
 	}
 	if target == "" {
 		sweepUsage()
@@ -117,10 +116,7 @@ func sweepCmd(args []string) {
 		}
 	}
 
-	pidStrs := make([]string, len(toKill))
-	for i, p := range toKill {
-		pidStrs[i] = strconv.Itoa(p)
-	}
+	pidStrs := pidsToStrings(toKill)
 	fmt.Printf("nssh: sending SIGTERM to %s on %s…\n", strings.Join(pidStrs, ", "), target)
 	if err := killRemotePIDs(target, "TERM", pidStrs); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: kill -TERM: %v\n", err)
@@ -137,15 +133,20 @@ func sweepCmd(args []string) {
 	if len(stillAlive) == 0 {
 		return
 	}
-	pidStrs = pidStrs[:0]
-	for _, p := range stillAlive {
-		pidStrs = append(pidStrs, strconv.Itoa(p))
-	}
+	pidStrs = pidsToStrings(stillAlive)
 	fmt.Fprintf(os.Stderr, "nssh: %d survived SIGTERM, sending SIGKILL: %s\n", len(stillAlive), strings.Join(pidStrs, ", "))
 	if err := killRemotePIDs(target, "KILL", pidStrs); err != nil {
 		fmt.Fprintf(os.Stderr, "nssh: kill -KILL: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+func pidsToStrings(pids []int) []string {
+	out := make([]string, len(pids))
+	for i, p := range pids {
+		out[i] = strconv.Itoa(p)
+	}
+	return out
 }
 
 // listRemoteMoshServers SSHs to target and returns mosh-server processes
