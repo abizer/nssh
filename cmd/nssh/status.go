@@ -324,8 +324,17 @@ func formatEvent(raw, label string) string {
 	if e.Exit != nil {
 		fmt.Fprintf(&sb, " exit=%d", *e.Exit)
 	}
+	if e.Gap != "" {
+		fmt.Fprintf(&sb, " gap=%s", e.Gap)
+	}
+	if e.Host != "" {
+		fmt.Fprintf(&sb, " host=%s", e.Host)
+	}
 	if e.ID != "" {
 		fmt.Fprintf(&sb, " id=%s", e.ID)
+	}
+	if e.Joined != 0 {
+		fmt.Fprintf(&sb, " joined=%d", e.Joined)
 	}
 	if e.Kind != "" {
 		fmt.Fprintf(&sb, " kind=%s", e.Kind)
@@ -339,8 +348,14 @@ func formatEvent(raw, label string) string {
 	if e.Persona != "" {
 		fmt.Fprintf(&sb, " persona=%s", e.Persona)
 	}
+	if e.Reconnect {
+		fmt.Fprintf(&sb, " reconnect=%v", e.Reconnect)
+	}
 	if e.Server != "" {
 		fmt.Fprintf(&sb, " server=%s", e.Server)
+	}
+	if e.Since != "" {
+		fmt.Fprintf(&sb, " since=%s", e.Since)
 	}
 	if e.Size > 0 {
 		fmt.Fprintf(&sb, " size=%d", e.Size)
